@@ -9,6 +9,7 @@ import threading
 import time
 import tkinter as tk
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -62,6 +63,12 @@ class CrawlerUI:
         ttk.Spinbox(settings, from_=5, to=10, textvariable=self.comment_count, width=7).grid(
             row=2, column=1, sticky="w", padx=6, pady=(8, 0)
         )
+        ttk.Label(settings, text="并发线程：").grid(row=2, column=1, sticky="w", padx=(100, 0), pady=(8, 0))
+        self.thread_count = tk.IntVar(value=3)
+        ttk.Spinbox(settings, from_=1, to=5, textvariable=self.thread_count, width=7).grid(
+            row=2, column=1, sticky="w", padx=(170, 0), pady=(8, 0)
+        )
+        ttk.Label(settings, text="建议 3，最高 5").grid(row=2, column=2, sticky="w", pady=(8, 0))
         settings.columnconfigure(1, weight=1)
 
         drop = ttk.LabelFrame(self.root, text="链接导入", padding=10)
@@ -165,6 +172,9 @@ class CrawlerUI:
             count = int(self.comment_count.get())
             if not 5 <= count <= 10:
                 raise ValueError
+            workers = int(self.thread_count.get())
+            if not 1 <= workers <= 5:
+                raise ValueError("并发线程必须设置为 1–5")
             # 提前验证代理格式和依赖是否正常。
             ToutiaoCrawler(proxy=self.proxy_var.get())
         except Exception as exc:
@@ -177,24 +187,26 @@ class CrawlerUI:
         urls = list(self.rows)
         for url in urls:
             self._set_status(url, "等待采集")
-        threading.Thread(target=self._worker, args=(urls, count), daemon=True).start()
+        threading.Thread(target=self._worker, args=(urls, count, workers), daemon=True).start()
 
-    def _worker(self, urls: list[str], count: int) -> None:
-        crawler = ToutiaoCrawler(proxy=self.proxy_var.get())
+    def _worker(self, urls: list[str], count: int, workers: int) -> None:
+        proxy = self.proxy_var.get()
         root = Path(self.output_var.get()).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
         log_path = root / "采集日志.txt"
+        log_lock = threading.Lock()
 
         def log(url: str, message: str) -> None:
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with log_path.open("a", encoding="utf-8-sig") as stream:
-                stream.write(f"[{stamp}] {url} | {message}\n")
+            with log_lock:
+                with log_path.open("a", encoding="utf-8-sig") as stream:
+                    stream.write(f"[{stamp}] {url} | {message}\n")
 
-        completed = 0
-        for url in urls:
+        def process(url: str) -> bool:
             if self.cancel_event.is_set():
                 self.events.put(("status", url, "已停止"))
-                continue
+                return False
+            crawler = ToutiaoCrawler(proxy=proxy)
             try:
                 log(url, "开始采集")
                 self.events.put(("status", url, "采集正文"))
@@ -205,14 +217,28 @@ class CrawlerUI:
                 log(url, f"评论成功，筛选 {len(comments)} 条")
                 self.events.put(("status", url, "下载图片"))
                 save_article(article, comments, root, crawler)
-                completed += 1
                 log(url, "采集完成")
                 self.events.put(("status", url, "完成"))
+                return True
             except Exception as exc:
                 message = str(exc).replace("\n", " ")[:80]
                 log(url, f"失败：{type(exc).__name__}: {exc}")
                 self.events.put(("status", url, f"失败：{message}"))
-            time.sleep(crawler.delay)
+                return False
+            finally:
+                time.sleep(crawler.delay)
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="toutiao") as executor:
+            futures = {executor.submit(process, url): url for url in urls}
+            for future in as_completed(futures):
+                try:
+                    if future.result():
+                        completed += 1
+                except Exception as exc:
+                    url = futures[future]
+                    log(url, f"线程异常：{type(exc).__name__}: {exc}")
+                    self.events.put(("status", url, f"失败：线程异常 {exc}"))
         self.events.put(("done", completed, len(urls)))
 
     def _stop(self) -> None:
