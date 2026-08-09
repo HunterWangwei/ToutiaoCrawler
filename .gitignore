@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+*.spec
+output/
+output_*/
+dist/*
+!dist/.gitkeep
+*.log
+采集日志.txt
