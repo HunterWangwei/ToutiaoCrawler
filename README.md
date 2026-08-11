@@ -1,6 +1,6 @@
 # 今日头条内容采集工具
 
-当前版本：`1.5.0`
+当前版本：`1.5.1`
 更新日期：`2026-08-11`
 
 用于批量采集今日头条微头条的正文、图片和高赞评论。软件提供 Windows 图形界面，可从 TXT 文件批量导入链接，并逐条显示采集进度。
@@ -152,6 +152,8 @@ socks5h://user:password@host:port
 
 - TXT 中只保存正文和评论，不保存标题、摘要、作者、发布时间、原文链接和文章点赞数。
 - 评论直接追加在正文后面。
+- 个人主页正文结尾的 `【lm】`、`【gmj】` 等已知来源标识会自动清除。
+- 评论点赞数仅用于排序，TXT 中不会写入“（赞 N）”。
 - TXT 文件名去掉 `.txt` 后，与对应图片文件夹名完全相同。
 - TXT 使用 `UTF-8 BOM` 编码，可直接用 Windows 记事本打开。
 
@@ -268,8 +270,8 @@ python .\toutiao_crawler.py --proxy 127.0.0.1:1080
 发布时同步修改 `version.py` 中的版本号，然后创建版本标签：
 
 ```powershell
-git tag v1.5.0
-git push origin v1.5.0
+git tag v1.5.1
+git push origin v1.5.1
 ```
 
 GitHub Actions 会自动构建 `ToutiaoCrawler.exe`、生成 SHA256 校验文件并发布到 Releases。

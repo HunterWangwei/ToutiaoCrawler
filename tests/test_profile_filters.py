@@ -1,7 +1,10 @@
 from datetime import datetime
+from pathlib import Path
+import tempfile
 import unittest
 
 from profile_ui import profile_filter_reason
+from toutiao_profile_crawler.crawler import clean_post_content, save_post
 
 
 class ProfileFilterTests(unittest.TestCase):
@@ -40,6 +43,34 @@ class ProfileFilterTests(unittest.TestCase):
             profile_filter_reason(self.post(None), 0, self.start, self.end),
             ("time_filtered", "发布时间未知"),
         )
+
+
+class ProfileContentCleaningTests(unittest.TestCase):
+    def test_removes_known_full_width_trailing_marks(self):
+        self.assertEqual(clean_post_content("正文内容。 【gmj】"), "正文内容。")
+        self.assertEqual(clean_post_content("正文内容。\n【lm】"), "正文内容。")
+
+    def test_accepts_half_width_brackets_and_case(self):
+        self.assertEqual(clean_post_content("正文内容。[LM]"), "正文内容。")
+
+    def test_keeps_mark_inside_normal_content(self):
+        self.assertEqual(clean_post_content("正文提到【lm】但后面还有文字"), "正文提到【lm】但后面还有文字")
+
+    def test_saved_comments_do_not_include_like_count(self):
+        class FakeCrawler:
+            @staticmethod
+            def download_images(post, folder: Path):
+                folder.mkdir(parents=True, exist_ok=True)
+                return []
+
+        post = {"id": "123", "content": "正文", "images": []}
+        comments = [{"text": "这是一条评论", "digg_count": 8}]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            save_post(root, FakeCrawler(), post, comments)
+            text = next((root / "内容").glob("*.txt")).read_text(encoding="utf-8-sig")
+        self.assertIn("1. 这是一条评论", text)
+        self.assertNotIn("赞 8", text)
 
 
 if __name__ == "__main__":

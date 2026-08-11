@@ -28,6 +28,9 @@ UNICODE_EMOJI_RE = re.compile(
     "\U0001F700-\U0001FAFF\u2600-\u27BF\uFE0E-\uFE0F\u200D"
     "]"
 )
+TRAILING_SOURCE_MARK_RE = re.compile(
+    r"(?:\s*[【\[]\s*(?:lm|gmj)\s*[】\]])+\s*$", re.I
+)
 
 
 def safe_name(value: str, limit: int = 50) -> str:
@@ -39,6 +42,11 @@ def strip_html(value: str) -> str:
     value = re.sub(r"<br\s*/?>", "\n", value or "", flags=re.I)
     value = re.sub(r"<[^>]+>", "", value)
     return html.unescape(value).strip()
+
+
+def clean_post_content(value: str) -> str:
+    """清理正文末尾由内容源附加的内部标识。"""
+    return TRAILING_SOURCE_MARK_RE.sub("", strip_html(value)).rstrip()
 
 
 def clean_comment(text: str) -> str:
@@ -288,7 +296,7 @@ class ProfileCrawler:
             "publish_time": created,
             "publish_timestamp": publish_timestamp,
             "comment_count": comment_count,
-            "content": strip_html(content),
+            "content": clean_post_content(content),
             "images": list(dict.fromkeys(images)),
         }
 
@@ -362,7 +370,7 @@ def save_post(root: Path, crawler: ProfileCrawler, post: dict, comments: list[di
     post["local_images"] = crawler.download_images(post, image_dir)
     lines = [post["content"], "", "评论：", ""]
     for index, comment in enumerate(comments, 1):
-        lines.append(f"{index}. {comment['text']}（赞 {comment['digg_count']}）")
+        lines.append(f"{index}. {comment['text']}")
         lines.append("")
     (content_dir / f"{name}.txt").write_text(
         "\n".join(lines).rstrip() + "\n", encoding="utf-8-sig"
