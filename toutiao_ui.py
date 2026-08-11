@@ -25,6 +25,7 @@ except ImportError as exc:
 from toutiao_crawler import ToutiaoCrawler, save_article
 from updater import can_self_update, check_latest_release, download_release, install_and_restart
 from version import APP_VERSION, GITHUB_RELEASES_URL
+from profile_ui import ProfileTab
 
 
 URL_RE = re.compile(r"https?://(?:www\.|m\.)?toutiao\.com/(?:article|w)/\d+/?[^\s]*", re.I)
@@ -35,8 +36,8 @@ class CrawlerUI:
     def __init__(self) -> None:
         self.root = TkinterDnD.Tk()
         self.root.title(f"今日头条内容采集 v{APP_VERSION}")
-        self.root.geometry("960x650")
-        self.root.minsize(780, 520)
+        self.root.geometry("1050x720")
+        self.root.minsize(860, 600)
         self.events: queue.Queue[tuple] = queue.Queue()
         self.running = False
         self.cancel_event = threading.Event()
@@ -51,7 +52,14 @@ class CrawlerUI:
         self.root.after(1800, lambda: self._check_update(manual=False))
 
     def _build(self) -> None:
-        settings = ttk.LabelFrame(self.root, text="采集设置", padding=10)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True)
+        micro_tab = ttk.Frame(self.notebook)
+        profile_tab = ttk.Frame(self.notebook)
+        self.notebook.add(micro_tab, text="微头条链接采集")
+        self.notebook.add(profile_tab, text="个人主页采集")
+
+        settings = ttk.LabelFrame(micro_tab, text="微头条链接采集设置", padding=10)
         settings.pack(fill="x", padx=12, pady=(12, 6))
 
         ttk.Label(settings, text="保存目录：").grid(row=0, column=0, sticky="w")
@@ -88,7 +96,7 @@ class CrawlerUI:
         self.blocked_words_var.trace_add("write", self._schedule_config_save)
         settings.columnconfigure(1, weight=1)
 
-        drop = ttk.LabelFrame(self.root, text="链接导入", padding=10)
+        drop = ttk.LabelFrame(micro_tab, text="链接导入", padding=10)
         drop.pack(fill="x", padx=12, pady=6)
         self.drop_label = ttk.Label(
             drop,
@@ -104,7 +112,7 @@ class CrawlerUI:
         ttk.Button(drop, text="导入 TXT", command=self._choose_txt).pack(side="left", padx=(10, 0))
         ttk.Button(drop, text="清空列表", command=self._clear).pack(side="left", padx=(8, 0))
 
-        table_frame = ttk.Frame(self.root)
+        table_frame = ttk.Frame(micro_tab)
         table_frame.pack(fill="both", expand=True, padx=12, pady=6)
         self.table = ttk.Treeview(table_frame, columns=("url", "status"), show="headings")
         self.table.heading("url", text="链接")
@@ -116,7 +124,7 @@ class CrawlerUI:
         self.table.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        actions = ttk.Frame(self.root, padding=(12, 6, 12, 12))
+        actions = ttk.Frame(micro_tab, padding=(12, 6, 12, 12))
         actions.pack(fill="x")
         self.summary_var = tk.StringVar(value="等待导入链接")
         ttk.Label(actions, textvariable=self.summary_var).pack(side="left")
@@ -127,6 +135,13 @@ class CrawlerUI:
         self.stop_button.pack(side="right")
         self.start_button = ttk.Button(actions, text="开始采集", command=self._start)
         self.start_button.pack(side="right", padx=(0, 8))
+
+        self.profile_tab = ProfileTab(
+            profile_tab,
+            self.root,
+            self.config,
+            self._schedule_config_save,
+        )
 
     @staticmethod
     def _config_candidates() -> list[Path]:
@@ -168,6 +183,8 @@ class CrawlerUI:
             "config_version": 1,
             "blocked_words": self.blocked_words_var.get(),
         }
+        if hasattr(self, "profile_tab"):
+            data.update(self.profile_tab.config_values())
         candidates = [self.config_path] + [
             path for path in self._config_candidates() if path != self.config_path
         ]
@@ -187,6 +204,9 @@ class CrawlerUI:
                 continue
 
     def _on_close(self) -> None:
+        self.cancel_event.set()
+        if hasattr(self, "profile_tab"):
+            self.profile_tab.stop_event.set()
         if self.config_save_job:
             self.root.after_cancel(self.config_save_job)
             self.config_save_job = None
@@ -348,7 +368,7 @@ class CrawlerUI:
         self.summary_var.set("正在停止，将在当前请求结束后停止……")
 
     def _check_update(self, manual: bool) -> None:
-        if self.running:
+        if self.running or (hasattr(self, "profile_tab") and self.profile_tab.running):
             if manual:
                 messagebox.showinfo("检查更新", "请在采集任务结束后检查更新。")
             return

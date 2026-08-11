@@ -12,3 +12,5 @@ dist/*
 采集日志.txt
 config.json
 config.json.tmp
+toutiao_profile_crawler/output/
+toutiao_profile_crawler/__pycache__/
