@@ -328,7 +328,7 @@ class CrawlerUI:
                 if matched_words:
                     matched = "、".join(matched_words)
                     log(url, f"含违禁词，已过滤：{matched}")
-                    self.events.put(("status", url, "含违禁词"))
+                    self.events.put(("status", url, f"含违禁词：{matched}"))
                     return "filtered"
                 self.events.put(("status", url, "采集评论"))
                 comments = crawler.comments(article["id"], article["detail_url"], count, pages=3)

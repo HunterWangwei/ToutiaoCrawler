@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from toutiao_profile_crawler import ProfileCrawler, save_post
+from toutiao_profile_crawler import ProfileCrawler, safe_name, save_post
 
 
 DEFAULT_PROFILE_BLOCKED_WORDS = "政治|中央|证券|央行"
@@ -85,6 +85,11 @@ class ProfileTab:
         self.thread_count = self._int_var("profile_threads", 3)
         ttk.Spinbox(settings, from_=1, to=5, textvariable=self.thread_count, width=7).grid(
             row=4, column=1, sticky="w", padx=6, pady=(8, 0)
+        )
+        ttk.Label(settings, text="当前采集作者：").grid(row=4, column=2, sticky="e", pady=(8, 0))
+        self.author_var = self._string_var("", "尚未识别")
+        ttk.Label(settings, textvariable=self.author_var).grid(
+            row=4, column=3, sticky="w", padx=6, pady=(8, 0)
         )
 
         ttk.Label(settings, text="违禁词：").grid(row=5, column=0, sticky="w", pady=(8, 0))
@@ -171,6 +176,7 @@ class ProfileTab:
         for item in self.table.get_children():
             self.table.delete(item)
         self.rows.clear()
+        self.author_var.set("正在识别……")
         self.summary_var.set("等待输入个人主页链接")
 
     def _set_status(self, url: str, status: str) -> None:
@@ -237,12 +243,14 @@ class ProfileTab:
         proxy: str,
         output_path: str,
     ) -> None:
-        root = Path(output_path).expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        log_path = root / "个人主页采集日志.txt"
+        base_root = Path(output_path).expanduser().resolve()
+        base_root.mkdir(parents=True, exist_ok=True)
         log_lock = threading.Lock()
+        log_path: Path | None = None
 
         def log(url: str, message: str) -> None:
+            if log_path is None:
+                return
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with log_lock:
                 with log_path.open("a", encoding="utf-8-sig") as stream:
@@ -255,6 +263,26 @@ class ProfileTab:
             self.events.put(("listing_error", str(exc)))
             return
 
+        # 先读取一篇作品确定主页作者，再创建“保存目录/作者名/”结构。
+        preloaded_posts: dict[str, dict] = {}
+        author = ""
+        for candidate_url in urls[:5]:
+            try:
+                candidate_crawler = ProfileCrawler(cookie=cookie, proxy=proxy)
+                candidate_post = candidate_crawler.post(candidate_url)
+                preloaded_posts[candidate_url] = candidate_post
+                author = str(candidate_post.get("author") or "").strip()
+                if author:
+                    break
+            except Exception:
+                continue
+        if not author:
+            token = ProfileCrawler.profile_token(profile_url)
+            author = f"未知作者_{safe_name(token, 12)}"
+        root = base_root / safe_name(author, 50)
+        root.mkdir(parents=True, exist_ok=True)
+        log_path = root / "个人主页采集日志.txt"
+        self.events.put(("author", author, str(root)))
         self.events.put(("urls", urls))
         results: list[dict] = []
 
@@ -266,11 +294,11 @@ class ProfileTab:
             try:
                 log(url, "开始采集")
                 self.events.put(("status", url, "采集正文"))
-                post = crawler.post(url)
+                post = preloaded_posts.get(url) or crawler.post(url)
                 matched = [word for word in blocked_words if word in post.get("content", "")]
                 if matched:
                     log(url, "含违禁词，已过滤：" + "、".join(matched))
-                    self.events.put(("status", url, "含违禁词"))
+                    self.events.put(("status", url, "含违禁词：" + "、".join(matched)))
                     return "filtered", None
                 self.events.put(("status", url, "采集评论"))
                 post_comments = crawler.comments(post["id"], post["detail_url"], comments, 3)
@@ -308,7 +336,7 @@ class ProfileTab:
         (root / "posts.json").write_text(
             json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8-sig"
         )
-        self.events.put(("done", completed, filtered, failed, len(urls)))
+        self.events.put(("done", completed, filtered, failed, len(urls), str(root)))
 
     def _stop(self) -> None:
         self.stop_event.set()
@@ -323,6 +351,9 @@ class ProfileTab:
                     for url in urls:
                         self.rows[url] = self.table.insert("", "end", values=(url, "等待采集"))
                     self.summary_var.set(f"主页发现 {len(urls)} 条作品，开始采集……")
+                elif event[0] == "author":
+                    self.author_var.set(event[1])
+                    self.summary_var.set(f"当前采集作者：{event[1]}；保存到 {event[2]}")
                 elif event[0] == "status":
                     self._set_status(event[1], event[2])
                 elif event[0] == "listing_error":
@@ -330,6 +361,7 @@ class ProfileTab:
                     self.start_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
                     self.summary_var.set("读取个人主页失败")
+                    self.author_var.set("识别失败")
                     messagebox.showerror("个人主页读取失败", event[1])
                 elif event[0] == "done":
                     self.running = False
@@ -337,7 +369,7 @@ class ProfileTab:
                     self.stop_button.configure(state="disabled")
                     self.summary_var.set(
                         f"采集结束：完成 {event[1]}，违禁词 {event[2]}，失败 {event[3]}，"
-                        f"总计 {event[4]}"
+                        f"总计 {event[4]}；作者目录 {event[5]}"
                     )
         except queue.Empty:
             pass
