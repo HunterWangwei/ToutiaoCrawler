@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from profile_ui import profile_filter_reason
+from profile_ui import extract_profile_urls, profile_filter_reason
 from toutiao_profile_crawler.crawler import clean_post_content, save_post
 
 
@@ -43,6 +43,17 @@ class ProfileFilterTests(unittest.TestCase):
             profile_filter_reason(self.post(None), 0, self.start, self.end),
             ("time_filtered", "发布时间未知"),
         )
+
+
+class ProfileUrlImportTests(unittest.TestCase):
+    def test_extracts_one_profile_per_line_and_removes_duplicates(self):
+        first = "https://www.toutiao.com/c/user/token/abc123/?tab=wtt"
+        second = "https://www.toutiao.com/c/user/token/xyz789/"
+        text = f"{first}\n无效内容\n{second}\n{first}\n"
+        self.assertEqual(extract_profile_urls(text), [first, second])
+
+    def test_ignores_article_urls(self):
+        self.assertEqual(extract_profile_urls("https://www.toutiao.com/article/123"), [])
 
 
 class ProfileContentCleaningTests(unittest.TestCase):

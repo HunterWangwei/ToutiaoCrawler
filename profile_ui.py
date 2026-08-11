@@ -8,7 +8,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, time as datetime_time
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -17,6 +17,23 @@ from toutiao_profile_crawler import ProfileCrawler, safe_name, save_post
 
 DEFAULT_PROFILE_BLOCKED_WORDS = "政治|中央|证券|央行"
 TIME_MODES = ("不限时间", "仅今天", "自定义时间段")
+PROFILE_URL_RE = re.compile(r"https?://(?:www\.)?toutiao\.com/c/user/token/[^\s/?#]+[^\s]*", re.I)
+
+
+def extract_profile_urls(text: str) -> list[str]:
+    """从 TXT 文本中按出现顺序提取并去重个人主页地址。"""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in PROFILE_URL_RE.finditer(text or ""):
+        url = match.group(0).rstrip(".,;，。；)、】]")
+        try:
+            ProfileCrawler.profile_token(url)
+        except ValueError:
+            continue
+        if url not in seen:
+            seen.add(url)
+            found.append(url)
+    return found
 
 
 def profile_filter_reason(
@@ -47,6 +64,7 @@ class ProfileTab:
         self.stop_event = threading.Event()
         self.rows: dict[str, str] = {}
         self.active_status: dict[str, tuple[str, float]] = {}
+        self.profile_urls: list[str] = []
         self._build()
         self.root.after(120, self._poll_events)
 
@@ -57,8 +75,13 @@ class ProfileTab:
         ttk.Label(settings, text="主页链接：").grid(row=0, column=0, sticky="w")
         self.profile_url = self._string_var("profile_url", "")
         ttk.Entry(settings, textvariable=self.profile_url).grid(
-            row=0, column=1, columnspan=3, sticky="ew", padx=6
+            row=0, column=1, sticky="ew", padx=6
         )
+        ttk.Button(settings, text="导入主页 TXT", command=self._import_profiles).grid(
+            row=0, column=2, padx=(0, 6)
+        )
+        self.imported_var = self._string_var("", "未导入（也可输入单个主页）")
+        ttk.Label(settings, textvariable=self.imported_var).grid(row=0, column=3, sticky="w")
 
         ttk.Label(settings, text="保存目录：").grid(row=1, column=0, sticky="w", pady=(8, 0))
         default_output = str((Path.cwd() / "profile_output").resolve())
@@ -115,7 +138,9 @@ class ProfileTab:
         ).grid(row=4, column=3, sticky="w", padx=6, pady=(8, 0))
 
         ttk.Label(settings, text="开始日期：").grid(row=5, column=0, sticky="w", pady=(8, 0))
-        self.start_date_var = self._string_var("profile_start_date", date.today().isoformat())
+        self.start_date_var = self._string_var(
+            "profile_start_date", (date.today() - timedelta(days=1)).isoformat()
+        )
         ttk.Entry(settings, textvariable=self.start_date_var, width=12).grid(
             row=5, column=1, sticky="w", padx=6, pady=(8, 0)
         )
@@ -218,13 +243,37 @@ class ProfileTab:
         if path:
             self.cookie_file_var.set(path)
 
+    def _import_profiles(self) -> None:
+        if self.running:
+            return
+        path = filedialog.askopenfilename(filetypes=[("TXT 文件", "*.txt"), ("所有文件", "*.*")])
+        if not path:
+            return
+        try:
+            text = Path(path).read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            text = Path(path).read_text(encoding="gb18030")
+        except Exception as exc:
+            messagebox.showerror("导入失败", str(exc))
+            return
+        urls = extract_profile_urls(text)
+        if not urls:
+            messagebox.showwarning("没有主页地址", "TXT 中没有找到有效的今日头条个人主页地址。")
+            return
+        self.profile_urls = urls
+        self.profile_url.set(urls[0])
+        self.imported_var.set(f"已导入 {len(urls)} 个主页")
+        self.summary_var.set(f"已导入 {len(urls)} 个主页，等待开始采集")
+
     def _clear(self) -> None:
         if self.running:
             return
         for item in self.table.get_children():
             self.table.delete(item)
         self.rows.clear()
-        self.author_var.set("正在识别……")
+        self.profile_urls.clear()
+        self.imported_var.set("未导入（也可输入单个主页）")
+        self.author_var.set("尚未识别")
         self.summary_var.set("等待输入个人主页链接")
 
     def _set_status(self, url: str, status: str) -> None:
@@ -240,9 +289,15 @@ class ProfileTab:
     def _start(self) -> None:
         if self.running:
             return
-        profile_url = self.profile_url.get().strip()
+        profile_urls = list(self.profile_urls)
+        if not profile_urls:
+            manual_url = self.profile_url.get().strip()
+            profile_urls = [manual_url] if manual_url else []
         try:
-            ProfileCrawler.profile_token(profile_url)
+            if not profile_urls:
+                raise ValueError("请导入主页 TXT，或输入一个个人主页链接")
+            for profile_url in profile_urls:
+                ProfileCrawler.profile_token(profile_url)
             pages = int(self.profile_pages.get())
             comments = int(self.comment_count.get())
             workers = int(self.thread_count.get())
@@ -294,13 +349,13 @@ class ProfileTab:
         self.summary_var.set("正在读取个人主页作品列表……")
         threading.Thread(
             target=self._worker,
-            args=(profile_url, pages, comments, workers, min_comments, start_at, end_at, cookie, blocked, proxy, output_path),
+            args=(profile_urls, pages, comments, workers, min_comments, start_at, end_at, cookie, blocked, proxy, output_path),
             daemon=True,
         ).start()
 
     def _worker(
         self,
-        profile_url: str,
+        profile_urls: list[str],
         pages: int,
         comments: int,
         workers: int,
@@ -325,97 +380,102 @@ class ProfileTab:
                 with log_path.open("a", encoding="utf-8-sig") as stream:
                     stream.write(f"[{stamp}] {url} | {message}\n")
 
-        try:
-            listing_crawler = ProfileCrawler(cookie=cookie, proxy=proxy)
-            urls = listing_crawler.list_post_urls(profile_url, max_pages=pages)
-        except Exception as exc:
-            self.events.put(("listing_error", str(exc)))
-            return
+        totals = {"completed": 0, "filtered": 0, "low_comments": 0, "time_filtered": 0, "failed": 0}
+        total_posts = 0
+        profile_failures = 0
 
-        # 先读取一篇作品确定主页作者，再创建“保存目录/作者名/”结构。
-        preloaded_posts: dict[str, dict] = {}
-        author = ""
-        for candidate_url in urls[:5]:
-            try:
-                candidate_crawler = ProfileCrawler(cookie=cookie, proxy=proxy)
-                candidate_post = candidate_crawler.post(candidate_url)
-                preloaded_posts[candidate_url] = candidate_post
-                author = str(candidate_post.get("author") or "").strip()
-                if author:
-                    break
-            except Exception:
-                continue
-        if not author:
-            token = ProfileCrawler.profile_token(profile_url)
-            author = f"未知作者_{safe_name(token, 12)}"
-        root = base_root / safe_name(author, 50)
-        root.mkdir(parents=True, exist_ok=True)
-        log_path = root / "个人主页采集日志.txt"
-        self.events.put(("author", author, str(root)))
-        self.events.put(("urls", urls))
-        results: list[dict] = []
-
-        def process(url: str) -> tuple[str, dict | None]:
+        for profile_index, profile_url in enumerate(profile_urls, 1):
             if self.stop_event.is_set():
-                self.events.put(("status", url, "已停止"))
-                return "stopped", None
-            crawler = ProfileCrawler(cookie=cookie, proxy=proxy)
+                break
+            self.events.put(("profile_progress", profile_index, len(profile_urls), profile_url))
             try:
-                log(url, "开始采集")
-                self.events.put(("status", url, "采集正文"))
-                post = preloaded_posts.get(url) or crawler.post(url)
-                filter_reason = profile_filter_reason(post, min_comments, start_at, end_at)
-                if filter_reason:
-                    status, message = filter_reason
-                    log(url, message + "，已过滤")
-                    self.events.put(("status", url, message))
-                    return status, None
-                matched = [word for word in blocked_words if word in post.get("content", "")]
-                if matched:
-                    log(url, "含违禁词，已过滤：" + "、".join(matched))
-                    self.events.put(("status", url, "含违禁词：" + "、".join(matched)))
-                    return "filtered", None
-                self.events.put(("status", url, "采集评论"))
-                post_comments = crawler.comments(post["id"], post["detail_url"], comments, 3)
-                self.events.put(("status", url, "下载图片"))
-                save_post(root, crawler, post, post_comments)
-                post["comments"] = post_comments
-                log(url, f"完成：图片 {len(post.get('local_images') or [])} 张，评论 {len(post_comments)} 条")
-                self.events.put(("status", url, "完成"))
-                return "completed", post
+                listing_crawler = ProfileCrawler(cookie=cookie, proxy=proxy)
+                urls = listing_crawler.list_post_urls(profile_url, max_pages=pages)
             except Exception as exc:
-                log(url, f"失败：{type(exc).__name__}: {exc}")
-                self.events.put(("status", url, "失败：" + str(exc).replace("\n", " ")[:80]))
-                return "failed", None
+                profile_failures += 1
+                self.events.put(("profile_error", profile_index, len(profile_urls), profile_url, str(exc)))
+                continue
 
-        completed = filtered = low_comments = time_filtered = failed = 0
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="profile") as executor:
-            futures = {executor.submit(process, url): url for url in urls}
-            for future in as_completed(futures):
+            preloaded_posts: dict[str, dict] = {}
+            author = ""
+            for candidate_url in urls[:5]:
                 try:
-                    status, post = future.result()
-                except Exception as exc:
-                    status, post = "failed", None
-                    url = futures[future]
-                    log(url, f"线程异常：{type(exc).__name__}: {exc}")
-                    self.events.put(("status", url, f"失败：线程异常 {exc}"))
-                if status == "completed":
-                    completed += 1
-                    if post:
-                        results.append(post)
-                elif status == "filtered":
-                    filtered += 1
-                elif status == "low_comments":
-                    low_comments += 1
-                elif status == "time_filtered":
-                    time_filtered += 1
-                elif status == "failed":
-                    failed += 1
+                    candidate_crawler = ProfileCrawler(cookie=cookie, proxy=proxy)
+                    candidate_post = candidate_crawler.post(candidate_url)
+                    preloaded_posts[candidate_url] = candidate_post
+                    author = str(candidate_post.get("author") or "").strip()
+                    if author:
+                        break
+                except Exception:
+                    continue
+            if not author:
+                token = ProfileCrawler.profile_token(profile_url)
+                author = f"未知作者_{safe_name(token, 12)}"
+            root = base_root / safe_name(author, 50)
+            root.mkdir(parents=True, exist_ok=True)
+            log_path = root / "个人主页采集日志.txt"
+            self.events.put(("author", author, str(root), profile_index, len(profile_urls)))
+            self.events.put(("urls", urls, author, profile_index, len(profile_urls)))
+            total_posts += len(urls)
+            results: list[dict] = []
 
-        (root / "posts.json").write_text(
-            json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8-sig"
-        )
-        self.events.put(("done", completed, filtered, low_comments, time_filtered, failed, len(urls), str(root)))
+            def process(url: str) -> tuple[str, dict | None]:
+                if self.stop_event.is_set():
+                    self.events.put(("status", url, "已停止"))
+                    return "stopped", None
+                crawler = ProfileCrawler(cookie=cookie, proxy=proxy)
+                try:
+                    log(url, "开始采集")
+                    self.events.put(("status", url, "采集正文"))
+                    post = preloaded_posts.get(url) or crawler.post(url)
+                    filter_reason = profile_filter_reason(post, min_comments, start_at, end_at)
+                    if filter_reason:
+                        status, message = filter_reason
+                        log(url, message + "，已过滤")
+                        self.events.put(("status", url, message))
+                        return status, None
+                    matched = [word for word in blocked_words if word in post.get("content", "")]
+                    if matched:
+                        log(url, "含违禁词，已过滤：" + "、".join(matched))
+                        self.events.put(("status", url, "含违禁词：" + "、".join(matched)))
+                        return "filtered", None
+                    self.events.put(("status", url, "采集评论"))
+                    post_comments = crawler.comments(post["id"], post["detail_url"], comments, 3)
+                    self.events.put(("status", url, "下载图片"))
+                    save_post(root, crawler, post, post_comments)
+                    post["comments"] = post_comments
+                    log(url, f"完成：图片 {len(post.get('local_images') or [])} 张，评论 {len(post_comments)} 条")
+                    self.events.put(("status", url, "完成"))
+                    return "completed", post
+                except Exception as exc:
+                    log(url, f"失败：{type(exc).__name__}: {exc}")
+                    self.events.put(("status", url, "失败：" + str(exc).replace("\n", " ")[:80]))
+                    return "failed", None
+
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="profile") as executor:
+                futures = {executor.submit(process, url): url for url in urls}
+                for future in as_completed(futures):
+                    try:
+                        status, post = future.result()
+                    except Exception as exc:
+                        status, post = "failed", None
+                        url = futures[future]
+                        log(url, f"线程异常：{type(exc).__name__}: {exc}")
+                        self.events.put(("status", url, f"失败：线程异常 {exc}"))
+                    if status in totals:
+                        totals[status] += 1
+                    if status == "completed" and post:
+                        results.append(post)
+
+            (root / "posts.json").write_text(
+                json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8-sig"
+            )
+
+        self.events.put((
+            "done", totals["completed"], totals["filtered"], totals["low_comments"],
+            totals["time_filtered"], totals["failed"], total_posts, str(base_root),
+            len(profile_urls), profile_failures,
+        ))
 
     def _stop(self) -> None:
         self.stop_event.set()
@@ -429,10 +489,24 @@ class ProfileTab:
                     urls = event[1]
                     for url in urls:
                         self.rows[url] = self.table.insert("", "end", values=(url, "等待采集"))
-                    self.summary_var.set(f"主页发现 {len(urls)} 条作品，开始采集……")
+                    self.summary_var.set(
+                        f"主页 {event[3]}/{event[4]}：{event[2]}，发现 {len(urls)} 条作品"
+                    )
                 elif event[0] == "author":
                     self.author_var.set(event[1])
-                    self.summary_var.set(f"当前采集作者：{event[1]}；保存到 {event[2]}")
+                    self.summary_var.set(
+                        f"主页 {event[3]}/{event[4]}，当前采集作者：{event[1]}；保存到 {event[2]}"
+                    )
+                elif event[0] == "profile_progress":
+                    self.author_var.set("正在识别……")
+                    self.summary_var.set(
+                        f"正在读取主页 {event[1]}/{event[2]}：{event[3]}"
+                    )
+                elif event[0] == "profile_error":
+                    self.author_var.set("主页读取失败")
+                    self.summary_var.set(
+                        f"主页 {event[1]}/{event[2]} 读取失败，继续下一个：{event[4]}"
+                    )
                 elif event[0] == "status":
                     self._set_status(event[1], event[2])
                 elif event[0] == "listing_error":
@@ -448,7 +522,8 @@ class ProfileTab:
                     self.stop_button.configure(state="disabled")
                     self.summary_var.set(
                         f"采集结束：完成 {event[1]}，违禁词 {event[2]}，评论数不足 {event[3]}，"
-                        f"时间过滤 {event[4]}，失败 {event[5]}，总计 {event[6]}；作者目录 {event[7]}"
+                        f"时间过滤 {event[4]}，作品失败 {event[5]}，总作品 {event[6]}；"
+                        f"主页 {event[8]} 个（读取失败 {event[9]} 个）；保存目录 {event[7]}"
                     )
         except queue.Empty:
             pass
