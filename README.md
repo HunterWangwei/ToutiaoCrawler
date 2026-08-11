@@ -1,6 +1,6 @@
 # 今日头条内容采集工具
 
-当前版本：`1.3.0`  
+当前版本：`1.3.1`  
 更新日期：`2026-08-11`
 
 用于批量采集今日头条微头条的正文、图片和高赞评论。软件提供 Windows 图形界面，可从 TXT 文件批量导入链接，并逐条显示采集进度。
@@ -73,6 +73,18 @@ https://www.toutiao.com/article/1872974616713225
 - 命中后不会继续抓取评论或下载图片，也不会生成该文章的 TXT。
 - 命中的具体词会写入 `采集日志.txt`。
 - 输入框留空可关闭违禁词过滤。
+- 修改违禁词后会自动保存，无需点击额外按钮。
+- 下次打开软件时会自动恢复上一次填写的内容。
+- 配置优先保存在 EXE 同目录的 `config.json`；如果目录不可写，则保存到 `%APPDATA%\ToutiaoCrawler\config.json`。
+
+配置文件示例：
+
+```json
+{
+  "config_version": 1,
+  "blocked_words": "政治|中央|证券|央行|新增词"
+}
+```
 
 ### SOCKS5 代理
 
@@ -196,8 +208,8 @@ python .\toutiao_crawler.py --proxy 127.0.0.1:1080
 发布时同步修改 `version.py` 中的版本号，然后创建版本标签：
 
 ```powershell
-git tag v1.3.0
-git push origin v1.3.0
+git tag v1.3.1
+git push origin v1.3.1
 ```
 
 GitHub Actions 会自动构建 `ToutiaoCrawler.exe`、生成 SHA256 校验文件并发布到 Releases。

@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import json
+import os
 import queue
 import re
+import sys
 import threading
 import time
 import tkinter as tk
@@ -25,6 +28,7 @@ from version import APP_VERSION, GITHUB_RELEASES_URL
 
 
 URL_RE = re.compile(r"https?://(?:www\.|m\.)?toutiao\.com/(?:article|w)/\d+/?[^\s]*", re.I)
+DEFAULT_BLOCKED_WORDS = "政治|中央|证券|央行"
 
 
 class CrawlerUI:
@@ -38,7 +42,11 @@ class CrawlerUI:
         self.cancel_event = threading.Event()
         self.rows: dict[str, str] = {}
         self.active_status: dict[str, tuple[str, float]] = {}
+        self.config_save_job: str | None = None
+        self.config_path = self._find_config_path()
+        self.config = self._load_config()
         self._build()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._poll_events)
         self.root.after(1800, lambda: self._check_update(manual=False))
 
@@ -71,10 +79,13 @@ class CrawlerUI:
         ttk.Label(settings, text="建议 3，最高 5").grid(row=2, column=2, sticky="w", pady=(8, 0))
 
         ttk.Label(settings, text="违禁词：").grid(row=3, column=0, sticky="w", pady=(8, 0))
-        self.blocked_words_var = tk.StringVar(value="政治|中央|证券|央行")
+        self.blocked_words_var = tk.StringVar(
+            value=str(self.config.get("blocked_words") or DEFAULT_BLOCKED_WORDS)
+        )
         ttk.Entry(settings, textvariable=self.blocked_words_var).grid(
             row=3, column=1, columnspan=2, sticky="ew", padx=6, pady=(8, 0)
         )
+        self.blocked_words_var.trace_add("write", self._schedule_config_save)
         settings.columnconfigure(1, weight=1)
 
         drop = ttk.LabelFrame(self.root, text="链接导入", padding=10)
@@ -116,6 +127,71 @@ class CrawlerUI:
         self.stop_button.pack(side="right")
         self.start_button = ttk.Button(actions, text="开始采集", command=self._start)
         self.start_button.pack(side="right", padx=(0, 8))
+
+    @staticmethod
+    def _config_candidates() -> list[Path]:
+        if getattr(sys, "frozen", False):
+            primary = Path(sys.executable).resolve().parent / "config.json"
+        else:
+            primary = Path(__file__).resolve().parent / "config.json"
+        appdata = Path(os.environ.get("APPDATA") or Path.home()) / "ToutiaoCrawler" / "config.json"
+        return [primary, appdata]
+
+    def _find_config_path(self) -> Path:
+        candidates = self._config_candidates()
+        for path in candidates:
+            if path.is_file():
+                return path
+        return candidates[0]
+
+    def _load_config(self) -> dict:
+        for path in self._config_candidates():
+            if not path.is_file():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8-sig"))
+                if isinstance(data, dict):
+                    self.config_path = path
+                    return data
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                continue
+        return {}
+
+    def _schedule_config_save(self, *_args) -> None:
+        if self.config_save_job:
+            self.root.after_cancel(self.config_save_job)
+        self.config_save_job = self.root.after(500, self._save_config)
+
+    def _save_config(self) -> None:
+        self.config_save_job = None
+        data = {
+            "config_version": 1,
+            "blocked_words": self.blocked_words_var.get(),
+        }
+        candidates = [self.config_path] + [
+            path for path in self._config_candidates() if path != self.config_path
+        ]
+        for path in candidates:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                temporary.replace(path)
+                self.config_path = path
+                self.config = data
+                return
+            except OSError:
+                continue
+
+    def _on_close(self) -> None:
+        if self.config_save_job:
+            self.root.after_cancel(self.config_save_job)
+            self.config_save_job = None
+        self._save_config()
+        self.root.destroy()
 
     def _choose_output(self) -> None:
         path = filedialog.askdirectory(initialdir=self.output_var.get() or str(Path.cwd()))
