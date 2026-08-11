@@ -8,7 +8,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import date, datetime, time as datetime_time
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -16,6 +16,24 @@ from toutiao_profile_crawler import ProfileCrawler, safe_name, save_post
 
 
 DEFAULT_PROFILE_BLOCKED_WORDS = "政治|中央|证券|央行"
+TIME_MODES = ("不限时间", "仅今天", "自定义时间段")
+
+
+def profile_filter_reason(
+    post: dict, min_comments: int, start_at: datetime | None, end_at: datetime | None
+) -> tuple[str, str] | None:
+    """返回个人主页作品的过滤类型和界面文案；无需过滤时返回 None。"""
+    if start_at is not None and end_at is not None:
+        timestamp = int(post.get("publish_timestamp") or 0)
+        if not timestamp:
+            return "time_filtered", "发布时间未知"
+        published_at = datetime.fromtimestamp(timestamp)
+        if not start_at <= published_at <= end_at:
+            return "time_filtered", f"超出时间范围：{published_at:%Y-%m-%d %H:%M:%S}"
+    total_comments = int(post.get("comment_count") or 0)
+    if min_comments and total_comments < min_comments:
+        return "low_comments", f"评论数不足：{total_comments}＜{min_comments}"
+    return None
 
 
 class ProfileTab:
@@ -81,23 +99,49 @@ class ProfileTab:
             row=3, column=3, sticky="w", padx=6, pady=(8, 0)
         )
 
-        ttk.Label(settings, text="并发线程：").grid(row=4, column=0, sticky="w", pady=(8, 0))
-        self.thread_count = self._int_var("profile_threads", 3)
-        ttk.Spinbox(settings, from_=1, to=5, textvariable=self.thread_count, width=7).grid(
+        ttk.Label(settings, text="最低评论数：").grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.min_comments = self._int_var("profile_min_comments", 10)
+        ttk.Spinbox(settings, from_=0, to=999999, textvariable=self.min_comments, width=7).grid(
             row=4, column=1, sticky="w", padx=6, pady=(8, 0)
         )
-        ttk.Label(settings, text="当前采集作者：").grid(row=4, column=2, sticky="e", pady=(8, 0))
-        self.author_var = self._string_var("", "尚未识别")
-        ttk.Label(settings, textvariable=self.author_var).grid(
-            row=4, column=3, sticky="w", padx=6, pady=(8, 0)
+        ttk.Label(settings, text="0 表示不限制").grid(
+            row=4, column=1, sticky="w", padx=(75, 0), pady=(8, 0)
         )
 
-        ttk.Label(settings, text="违禁词：").grid(row=5, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(settings, text="发布时间：").grid(row=4, column=2, sticky="e", pady=(8, 0))
+        self.time_mode_var = self._string_var("profile_time_mode", TIME_MODES[0])
+        ttk.Combobox(
+            settings, textvariable=self.time_mode_var, values=TIME_MODES, state="readonly", width=14
+        ).grid(row=4, column=3, sticky="w", padx=6, pady=(8, 0))
+
+        ttk.Label(settings, text="开始日期：").grid(row=5, column=0, sticky="w", pady=(8, 0))
+        self.start_date_var = self._string_var("profile_start_date", date.today().isoformat())
+        ttk.Entry(settings, textvariable=self.start_date_var, width=12).grid(
+            row=5, column=1, sticky="w", padx=6, pady=(8, 0)
+        )
+        ttk.Label(settings, text="结束日期：").grid(row=5, column=2, sticky="e", pady=(8, 0))
+        self.end_date_var = self._string_var("profile_end_date", date.today().isoformat())
+        ttk.Entry(settings, textvariable=self.end_date_var, width=12).grid(
+            row=5, column=3, sticky="w", padx=6, pady=(8, 0)
+        )
+
+        ttk.Label(settings, text="并发线程：").grid(row=6, column=0, sticky="w", pady=(8, 0))
+        self.thread_count = self._int_var("profile_threads", 3)
+        ttk.Spinbox(settings, from_=1, to=5, textvariable=self.thread_count, width=7).grid(
+            row=6, column=1, sticky="w", padx=6, pady=(8, 0)
+        )
+        ttk.Label(settings, text="当前采集作者：").grid(row=6, column=2, sticky="e", pady=(8, 0))
+        self.author_var = self._string_var("", "尚未识别")
+        ttk.Label(settings, textvariable=self.author_var).grid(
+            row=6, column=3, sticky="w", padx=6, pady=(8, 0)
+        )
+
+        ttk.Label(settings, text="违禁词：").grid(row=7, column=0, sticky="w", pady=(8, 0))
         self.blocked_words_var = self._string_var(
             "profile_blocked_words", DEFAULT_PROFILE_BLOCKED_WORDS
         )
         ttk.Entry(settings, textvariable=self.blocked_words_var).grid(
-            row=5, column=1, columnspan=3, sticky="ew", padx=6, pady=(8, 0)
+            row=7, column=1, columnspan=3, sticky="ew", padx=6, pady=(8, 0)
         )
         settings.columnconfigure(1, weight=1)
         settings.columnconfigure(3, weight=1)
@@ -156,6 +200,10 @@ class ProfileTab:
             "profile_output": self.output_var.get(),
             "profile_pages": integer(self.profile_pages, 0),
             "profile_comments": integer(self.comment_count, 10),
+            "profile_min_comments": integer(self.min_comments, 10),
+            "profile_time_mode": self.time_mode_var.get(),
+            "profile_start_date": self.start_date_var.get(),
+            "profile_end_date": self.end_date_var.get(),
             "profile_threads": integer(self.thread_count, 3),
             "profile_blocked_words": self.blocked_words_var.get(),
         }
@@ -198,12 +246,30 @@ class ProfileTab:
             pages = int(self.profile_pages.get())
             comments = int(self.comment_count.get())
             workers = int(self.thread_count.get())
+            min_comments = int(self.min_comments.get())
+            time_mode = self.time_mode_var.get()
             if pages < 0:
                 raise ValueError("主页页数不能小于 0")
             if not 5 <= comments <= 10:
                 raise ValueError("评论数量必须设置为 5–10")
             if not 1 <= workers <= 5:
                 raise ValueError("并发线程必须设置为 1–5")
+            if min_comments < 0:
+                raise ValueError("最低评论数不能小于 0")
+            if time_mode not in TIME_MODES:
+                raise ValueError("发布时间设置无效")
+            if time_mode == "仅今天":
+                start_at = datetime.combine(date.today(), datetime_time.min)
+                end_at = datetime.combine(date.today(), datetime_time.max)
+            elif time_mode == "自定义时间段":
+                start_day = datetime.strptime(self.start_date_var.get().strip(), "%Y-%m-%d").date()
+                end_day = datetime.strptime(self.end_date_var.get().strip(), "%Y-%m-%d").date()
+                if start_day > end_day:
+                    raise ValueError("开始日期不能晚于结束日期")
+                start_at = datetime.combine(start_day, datetime_time.min)
+                end_at = datetime.combine(end_day, datetime_time.max)
+            else:
+                start_at = end_at = None
             cookie_file = self.cookie_file_var.get().strip()
             cookie = Path(cookie_file).read_text(encoding="utf-8-sig").strip() if cookie_file else ""
             ProfileCrawler(cookie=cookie, proxy=self.proxy_var.get())
@@ -228,7 +294,7 @@ class ProfileTab:
         self.summary_var.set("正在读取个人主页作品列表……")
         threading.Thread(
             target=self._worker,
-            args=(profile_url, pages, comments, workers, cookie, blocked, proxy, output_path),
+            args=(profile_url, pages, comments, workers, min_comments, start_at, end_at, cookie, blocked, proxy, output_path),
             daemon=True,
         ).start()
 
@@ -238,6 +304,9 @@ class ProfileTab:
         pages: int,
         comments: int,
         workers: int,
+        min_comments: int,
+        start_at: datetime | None,
+        end_at: datetime | None,
         cookie: str,
         blocked_words: list[str],
         proxy: str,
@@ -295,6 +364,12 @@ class ProfileTab:
                 log(url, "开始采集")
                 self.events.put(("status", url, "采集正文"))
                 post = preloaded_posts.get(url) or crawler.post(url)
+                filter_reason = profile_filter_reason(post, min_comments, start_at, end_at)
+                if filter_reason:
+                    status, message = filter_reason
+                    log(url, message + "，已过滤")
+                    self.events.put(("status", url, message))
+                    return status, None
                 matched = [word for word in blocked_words if word in post.get("content", "")]
                 if matched:
                     log(url, "含违禁词，已过滤：" + "、".join(matched))
@@ -313,7 +388,7 @@ class ProfileTab:
                 self.events.put(("status", url, "失败：" + str(exc).replace("\n", " ")[:80]))
                 return "failed", None
 
-        completed = filtered = failed = 0
+        completed = filtered = low_comments = time_filtered = failed = 0
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="profile") as executor:
             futures = {executor.submit(process, url): url for url in urls}
             for future in as_completed(futures):
@@ -330,13 +405,17 @@ class ProfileTab:
                         results.append(post)
                 elif status == "filtered":
                     filtered += 1
+                elif status == "low_comments":
+                    low_comments += 1
+                elif status == "time_filtered":
+                    time_filtered += 1
                 elif status == "failed":
                     failed += 1
 
         (root / "posts.json").write_text(
             json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8-sig"
         )
-        self.events.put(("done", completed, filtered, failed, len(urls), str(root)))
+        self.events.put(("done", completed, filtered, low_comments, time_filtered, failed, len(urls), str(root)))
 
     def _stop(self) -> None:
         self.stop_event.set()
@@ -368,8 +447,8 @@ class ProfileTab:
                     self.start_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
                     self.summary_var.set(
-                        f"采集结束：完成 {event[1]}，违禁词 {event[2]}，失败 {event[3]}，"
-                        f"总计 {event[4]}；作者目录 {event[5]}"
+                        f"采集结束：完成 {event[1]}，违禁词 {event[2]}，评论数不足 {event[3]}，"
+                        f"时间过滤 {event[4]}，失败 {event[5]}，总计 {event[6]}；作者目录 {event[7]}"
                     )
         except queue.Empty:
             pass

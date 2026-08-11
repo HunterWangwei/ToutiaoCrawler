@@ -240,13 +240,19 @@ class ProfileCrawler:
         if not match:
             raise RuntimeError(f"作品 {item_id} 没有找到 RENDER_DATA")
         payload = json.loads(unquote(html.unescape(match.group(1))))
-        base = payload.get("articleInfo", {}).get("thread", {}).get("threadBase")
+        thread = payload.get("articleInfo", {}).get("thread", {})
+        base = thread.get("threadBase")
         if not base:
             data = payload.get("data", payload)
             content = data.get("richContent") or data.get("content") or ""
             images = data.get("ugcImages") or []
             author = data.get("source") or ""
             created = data.get("publishTime") or ""
+            timestamp = data.get("createTime") or data.get("publishTime") or 0
+            action = data.get("action") or {}
+            comment_count = data.get("commentCount") or data.get("comment_count")
+            if comment_count is None:
+                comment_count = action.get("commentCount") or action.get("comment_count") or 0
         else:
             content = base.get("richContent") or base.get("content") or ""
             nodes = base.get("largeImageList") or base.get("originImageList") or []
@@ -254,6 +260,23 @@ class ProfileCrawler:
             author = ((base.get("user") or {}).get("info") or {}).get("name") or ""
             timestamp = base.get("createTime")
             created = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else ""
+            action = base.get("action") or thread.get("action") or {}
+            comment_count = action.get("commentCount") or action.get("comment_count") or 0
+        try:
+            publish_timestamp = int(timestamp or 0)
+        except (TypeError, ValueError):
+            publish_timestamp = 0
+            if created:
+                try:
+                    publish_timestamp = int(datetime.fromisoformat(str(created)).timestamp())
+                except (TypeError, ValueError):
+                    pass
+        if publish_timestamp > 10_000_000_000:
+            publish_timestamp //= 1000
+        try:
+            comment_count = int(comment_count or 0)
+        except (TypeError, ValueError):
+            comment_count = 0
         if not images:
             images = re.findall(r'<img[^>]+src=["\']([^"\']+)', content, re.I)
         images = [urljoin("https:", url) if url.startswith("//") else url for url in images]
@@ -263,6 +286,8 @@ class ProfileCrawler:
             "detail_url": detail_url,
             "author": author,
             "publish_time": created,
+            "publish_timestamp": publish_timestamp,
+            "comment_count": comment_count,
             "content": strip_html(content),
             "images": list(dict.fromkeys(images)),
         }
