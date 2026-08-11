@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -70,7 +71,11 @@ def check_latest_release(proxy: str = "") -> dict | None:
     }
 
 
-def download_release(release: dict, proxy: str = "") -> Path:
+def download_release(
+    release: dict,
+    proxy: str = "",
+    progress: Callable[[int, int], None] | None = None,
+) -> Path:
     """下载并校验新版 EXE，返回临时文件路径。"""
     target = Path(tempfile.gettempdir()) / f"{APP_NAME}-{release['version']}.exe.download"
     with _session(proxy) as session:
@@ -82,12 +87,19 @@ def download_release(release: dict, proxy: str = "") -> Path:
 
         with session.get(release["exe_url"], stream=True, timeout=(10, 60)) as response:
             response.raise_for_status()
+            total = int(response.headers.get("Content-Length") or 0)
+            downloaded = 0
+            if progress:
+                progress(downloaded, total)
             digest = hashlib.sha256()
             with target.open("wb") as stream:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         stream.write(chunk)
                         digest.update(chunk)
+                        downloaded += len(chunk)
+                        if progress:
+                            progress(downloaded, total)
 
     actual = digest.hexdigest().lower()
     if actual != expected:
@@ -116,14 +128,19 @@ $Source = '{ps_quote(str(downloaded_exe.resolve()))}'
 $Target = '{ps_quote(str(current_exe))}'
 $Working = '{ps_quote(str(current_exe.parent))}'
 $WaitPid = {os.getpid()}
-for ($i = 0; $i -lt 90; $i++) {{
-    if (-not (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue)) {{ break }}
+for ($i = 0; $i -lt 120; $i++) {{
+    $Running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {{
+        try {{ $_.Path -eq $Target }} catch {{ $false }}
+    }})
+    if ($Running.Count -eq 0) {{ break }}
     Start-Sleep -Seconds 1
 }}
 for ($i = 0; $i -lt 60; $i++) {{
     try {{
         Copy-Item -LiteralPath $Source -Destination ($Target + '.new') -Force
         Move-Item -LiteralPath ($Target + '.new') -Destination $Target -Force
+        # 给杀毒软件和文件系统留出完成扫描、刷新文件句柄的时间。
+        Start-Sleep -Seconds 5
         Start-Process -FilePath $Target -WorkingDirectory $Working
         Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue

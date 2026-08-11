@@ -128,6 +128,13 @@ class CrawlerUI:
         actions.pack(fill="x")
         self.summary_var = tk.StringVar(value="等待导入链接")
         ttk.Label(actions, textvariable=self.summary_var).pack(side="left")
+        self.update_progress_var = tk.DoubleVar(value=0)
+        self.update_progress = ttk.Progressbar(
+            actions, variable=self.update_progress_var, maximum=100, length=160, mode="determinate"
+        )
+        self.update_progress.pack(side="left", padx=(12, 4))
+        self.update_progress_text = tk.StringVar(value="")
+        ttk.Label(actions, textvariable=self.update_progress_text, width=8).pack(side="left")
         ttk.Label(actions, text=f"v{APP_VERSION}").pack(side="left", padx=(12, 0))
         self.update_button = ttk.Button(actions, text="检查更新", command=lambda: self._check_update(True))
         self.update_button.pack(side="right", padx=(8, 0))
@@ -388,10 +395,17 @@ class CrawlerUI:
     def _download_update(self, release: dict) -> None:
         self.update_button.configure(state="disabled")
         self.summary_var.set(f"正在下载 v{release['version']}……")
+        self.update_progress.stop()
+        self.update_progress.configure(mode="determinate")
+        self.update_progress_var.set(0)
+        self.update_progress_text.set("0%")
 
         def worker() -> None:
             try:
-                path = download_release(release, self.proxy_var.get())
+                def progress(downloaded: int, total: int) -> None:
+                    self.events.put(("update_progress", downloaded, total))
+
+                path = download_release(release, self.proxy_var.get(), progress)
                 self.events.put(("update_download", release, path, None))
             except Exception as exc:
                 self.events.put(("update_download", release, None, str(exc)))
@@ -438,17 +452,45 @@ class CrawlerUI:
                     _, release, path, error = event
                     self.update_button.configure(state="normal")
                     if error:
+                        self.update_progress.stop()
+                        self.update_progress.configure(mode="determinate")
+                        self.update_progress_var.set(0)
+                        self.update_progress_text.set("")
                         messagebox.showerror("更新失败", error)
                         self.summary_var.set("更新失败")
                     else:
                         try:
                             install_and_restart(path)
                         except Exception as exc:
+                            self.update_progress.stop()
+                            self.update_progress.configure(mode="determinate")
+                            self.update_progress_var.set(0)
+                            self.update_progress_text.set("")
                             messagebox.showerror("安装更新失败", str(exc))
                             self.summary_var.set("安装更新失败")
                         else:
+                            self.update_progress.stop()
+                            self.update_progress.configure(mode="determinate")
+                            self.update_progress_var.set(100)
+                            self.update_progress_text.set("100%")
                             self.summary_var.set("正在安装更新并重启……")
                             self.root.after(300, self.root.destroy)
+                elif event[0] == "update_progress":
+                    downloaded, total = event[1], event[2]
+                    if total > 0:
+                        percent = min(100, downloaded * 100 / total)
+                        self.update_progress.configure(mode="determinate")
+                        self.update_progress_var.set(percent)
+                        self.update_progress_text.set(f"{percent:.0f}%")
+                        self.summary_var.set(
+                            f"正在下载更新：{downloaded / 1024 / 1024:.1f}/"
+                            f"{total / 1024 / 1024:.1f} MB"
+                        )
+                    else:
+                        if str(self.update_progress.cget("mode")) != "indeterminate":
+                            self.update_progress.configure(mode="indeterminate")
+                            self.update_progress.start(12)
+                        self.update_progress_text.set(f"{downloaded / 1024 / 1024:.1f} MB")
         except queue.Empty:
             pass
         for url, (stage, started) in list(self.active_status.items()):
