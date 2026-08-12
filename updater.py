@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -22,13 +23,19 @@ from version import (
 )
 
 
-def _version_tuple(value: str) -> tuple[int, ...]:
-    value = value.strip().lower().lstrip("v")
-    parts = []
-    for item in value.split("."):
-        digits = "".join(char for char in item if char.isdigit())
-        parts.append(int(digits or 0))
-    return tuple((parts + [0, 0, 0])[:3])
+def _version_tuple(value: str) -> tuple[int, int, int, int, int]:
+    """生成可比较版本键：alpha < beta < test < rc < 正式版。"""
+    normalized = value.strip().lower().lstrip("v")
+    match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?([a-z]+)(\d*)?)?", normalized)
+    if not match:
+        return 0, 0, 0, 0, 0
+    major, minor, patch = (int(item or 0) for item in match.group(1, 2, 3))
+    label = match.group(4) or ""
+    prerelease_number = int(match.group(5) or 0)
+    aliases = {"a": "alpha", "b": "beta", "preview": "test", "pre": "test"}
+    label = aliases.get(label, label)
+    stage = {"alpha": 0, "beta": 1, "test": 2, "rc": 3}.get(label, 4 if not label else 0)
+    return major, minor, patch, stage, prerelease_number
 
 
 def _session(proxy: str = "") -> requests.Session:

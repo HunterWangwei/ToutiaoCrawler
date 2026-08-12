@@ -1,6 +1,6 @@
 # 今日头条内容采集工具
 
-当前版本：`1.7.1`
+当前版本：`1.7.2`
 更新日期：`2026-08-11`
 
 用于批量采集今日头条微头条的正文、图片和高赞评论。软件提供 Windows 图形界面，可从 TXT 文件批量导入链接，并逐条显示采集进度。
@@ -27,6 +27,8 @@ EXE 已包含 Python、拖拽组件和 SOCKS5 支持，其他电脑不需要安�
 更新下载期间会显示百分比、已下载大小和文件总大小。新版首先保存为当前软件目录下的 `ToutiaoCrawler-版本号.exe.part`，SHA256 校验通过后改名为 `ToutiaoCrawler-版本号.exe`。软件随后直接启动新文件并关闭旧版本，不再覆盖或删除原 EXE。
 
 自动更新需要当前 EXE 所在目录具有写入权限。旧版会保留作为回退文件，确认新版运行正常后可手动删除不再需要的旧版 EXE。
+
+版本比较支持预发布后缀。同一数字版本下，`alpha < beta < test < rc < 正式版`，因此 `1.7.1-test` 可以识别并更新到正式版 `1.7.1`。
 
 ## 二、导入链接
 
@@ -351,8 +353,8 @@ python .\toutiao_profile_crawler\crawler.py "https://www.toutiao.com/c/user/toke
 发布时同步修改 `version.py` 中的版本号，然后创建版本标签：
 
 ```powershell
-git tag v1.7.1
-git push origin v1.7.1
+git tag v1.7.2
+git push origin v1.7.2
 ```
 
 GitHub Actions 会注入备用更新代理、构建 `ToutiaoCrawler.exe`、生成 SHA256 校验文件，并使用 `RELEASE_NOTES.md` 发布完整 Release说明。发布前必须配置仓库 Secret `BUILTIN_UPDATE_PROXY`。

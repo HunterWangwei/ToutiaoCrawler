@@ -43,6 +43,17 @@ class FakeSession:
 
 
 class UpdaterProgressTests(unittest.TestCase):
+    def test_prerelease_is_older_than_same_number_stable_release(self):
+        self.assertLess(updater._version_tuple("1.7.1-test"), updater._version_tuple("1.7.1"))
+
+    def test_prerelease_stage_order(self):
+        versions = ["v2.0.0-alpha", "2.0.0-beta", "2.0.0-test", "2.0.0-rc1", "2.0.0"]
+        keys = [updater._version_tuple(value) for value in versions]
+        self.assertEqual(keys, sorted(keys))
+
+    def test_newer_numeric_version_remains_newer(self):
+        self.assertLess(updater._version_tuple("1.7.1"), updater._version_tuple("1.7.2-test"))
+
     def test_download_reports_progress_and_verifies_hash(self):
         payload = b"new-executable-content"
         expected = hashlib.sha256(payload).hexdigest()
