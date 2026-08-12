@@ -1,6 +1,6 @@
 # 今日头条内容采集工具
 
-当前版本：`1.6.1`
+当前版本：`1.7.0`
 更新日期：`2026-08-11`
 
 用于批量采集今日头条微头条的正文、图片和高赞评论。软件提供 Windows 图形界面，可从 TXT 文件批量导入链接，并逐条显示采集进度。
@@ -66,6 +66,7 @@ https://www.toutiao.com/article/1872974616713225
 - 可选 Cookie 文件，用于主页接口需要登录状态的情况。
 - 主页页数限制，`0` 表示抓到末页。
 - 高赞评论数量 `5–10`。
+- 采集模式可选择“内容 + 图片 + 评论”或“仅内容 + 图片”。
 - 最低作品评论数，低于该值直接跳过；设为 `0` 表示不限制。
 - 发布时间范围支持“不限时间”“仅今天”和“自定义时间段”。
 - 自定义日期格式为 `YYYY-MM-DD`，开始日和结束日均包含在采集范围内。
@@ -80,6 +81,8 @@ https://www.toutiao.com/article/1872974616713225
 - 某个主页读取失败时会记录状态并继续处理下一个主页，不会中断整批任务。
 
 “最低作品评论数”依据头条作品详情返回的评论总数判断，不是依据最终清洗后保存的高赞评论条数判断。时间筛选使用运行软件电脑的本地日期和时区，“仅今天”表示本机当天 `00:00:00–23:59:59`。
+
+选择“仅内容 + 图片”后，软件不会请求评论列表接口，TXT 也不会生成“评论：”标题或空评论区。最低评论数筛选仍然有效，因为筛选使用的是作品详情中的评论总数。
 
 两个页签分别维护输入、状态表、停止控制、保存目录和日志，不会互相覆盖运行状态。
 
@@ -139,6 +142,7 @@ https://www.toutiao.com/article/1872974616713225
   "profile_output": "D:\\profile_output",
   "profile_pages": 0,
   "profile_comments": 10,
+  "profile_content_mode": "内容 + 图片 + 评论",
   "profile_min_comments": 10,
   "profile_time_mode": "自定义时间段",
   "profile_start_date": "2026-08-10",
@@ -290,6 +294,10 @@ https://www.toutiao.com/c/user/token/主页Token2/?tab=wtt
 - 自动更新源为 GitHub Releases，电脑必须能够解析并访问 `api.github.com` 和 `github.com`。
 - 出现 `NameResolutionError`、`getaddrinfo failed` 或“无法解析 github.com”时，属于 DNS 或网络访问问题，并非更新包损坏。
 - 更新器使用“微头条链接采集”页中的 S5 代理；需要通过代理更新时，请先在该页填写可用代理，再点击“检查更新”。
+- 如果用户填写的代理或本机直连 GitHub 失败，正式 Release 会自动尝试构建时注入的备用更新代理，并在状态栏显示切换提示。
+- 备用代理仅用于检查和下载软件更新，不用于采集今日头条内容。
+- 备用代理凭据不会写入公开源码或文档，而是在 GitHub Actions 编译正式 EXE 时通过仓库 Secret 注入。
+- 备用代理属于兜底通道，若代理本身到期、拥堵或不可用，仍需手动下载新版或填写其他可用代理。
 - 推荐使用 `socks5h`，让 GitHub 域名解析也通过代理完成。
 - 无法访问 GitHub 的电脑可由其他电脑下载 Release 中的 EXE，再通过网盘、局域网或 U 盘手动覆盖旧版；覆盖前应退出所有软件进程。
 
@@ -340,8 +348,8 @@ python .\toutiao_profile_crawler\crawler.py "https://www.toutiao.com/c/user/toke
 发布时同步修改 `version.py` 中的版本号，然后创建版本标签：
 
 ```powershell
-git tag v1.6.1
-git push origin v1.6.1
+git tag v1.7.0
+git push origin v1.7.0
 ```
 
-GitHub Actions 会自动构建 `ToutiaoCrawler.exe`、生成 SHA256 校验文件并发布到 Releases。
+GitHub Actions 会注入备用更新代理、构建 `ToutiaoCrawler.exe`、生成 SHA256 校验文件，并使用 `RELEASE_NOTES.md` 发布完整 Release说明。发布前必须配置仓库 Secret `BUILTIN_UPDATE_PROXY`。

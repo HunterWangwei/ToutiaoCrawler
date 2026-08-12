@@ -63,3 +63,35 @@ class UpdaterProgressTests(unittest.TestCase):
             self.assertEqual(events[-1], (len(payload), len(payload)))
         finally:
             Path(target).unlink(missing_ok=True)
+
+    def test_proxy_fallback_runs_after_primary_failure(self):
+        attempts = []
+        notices = []
+
+        def operation(proxy, is_builtin):
+            attempts.append((proxy, is_builtin))
+            if not is_builtin:
+                raise OSError("primary unavailable")
+            return "ok"
+
+        with patch.object(updater, "BUILTIN_UPDATE_PROXY", "socks5h://fallback.example:1080"):
+            result = updater._run_with_proxy_fallback(
+                operation, "", lambda: notices.append("fallback")
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(
+            attempts,
+            [("", False), ("socks5h://fallback.example:1080", True)],
+        )
+        self.assertEqual(notices, ["fallback"])
+
+    def test_user_proxy_is_tried_before_builtin_proxy(self):
+        with patch.object(updater, "BUILTIN_UPDATE_PROXY", "socks5h://fallback.example:1080"):
+            self.assertEqual(
+                updater._proxy_candidates("socks5h://user.example:1080"),
+                [
+                    ("socks5h://user.example:1080", False),
+                    ("socks5h://fallback.example:1080", True),
+                ],
+            )

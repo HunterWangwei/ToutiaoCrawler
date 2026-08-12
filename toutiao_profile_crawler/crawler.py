@@ -362,16 +362,23 @@ class ProfileCrawler:
         return saved
 
 
-def save_post(root: Path, crawler: ProfileCrawler, post: dict, comments: list[dict]) -> None:
+def save_post(
+    root: Path,
+    crawler: ProfileCrawler,
+    post: dict,
+    comments: list[dict] | None,
+) -> None:
     name = f"{post['id']}_{safe_name(post['content'])}"
     content_dir = root / "内容"
     image_dir = root / "图片" / name
     content_dir.mkdir(parents=True, exist_ok=True)
     post["local_images"] = crawler.download_images(post, image_dir)
-    lines = [post["content"], "", "评论：", ""]
-    for index, comment in enumerate(comments, 1):
-        lines.append(f"{index}. {comment['text']}")
-        lines.append("")
+    lines = [post["content"]]
+    if comments is not None:
+        lines.extend(["", "评论：", ""])
+        for index, comment in enumerate(comments, 1):
+            lines.append(f"{index}. {comment['text']}")
+            lines.append("")
     (content_dir / f"{name}.txt").write_text(
         "\n".join(lines).rstrip() + "\n", encoding="utf-8-sig"
     )
@@ -383,6 +390,20 @@ def main() -> int:
     parser.add_argument("-o", "--output", default="output", help="输出目录")
     parser.add_argument("-n", "--top-comments", type=int, choices=range(5, 11), default=10)
     parser.add_argument("--comment-pages", type=int, default=3)
+    comment_mode = parser.add_mutually_exclusive_group()
+    comment_mode.add_argument(
+        "--with-comments",
+        dest="with_comments",
+        action="store_true",
+        help="采集正文、图片和高赞评论（默认）",
+    )
+    comment_mode.add_argument(
+        "--no-comments",
+        dest="with_comments",
+        action="store_false",
+        help="只采集正文和图片，不请求评论接口",
+    )
+    parser.set_defaults(with_comments=True)
     parser.add_argument("--profile-pages", type=int, default=0, help="0 表示抓到末页")
     parser.add_argument("--cookie-file", default="")
     parser.add_argument("--proxy", default="")
@@ -402,13 +423,18 @@ def main() -> int:
         try:
             print(f"[{index}/{len(urls)}] {url}")
             post = crawler.post(url)
-            comments = crawler.comments(
-                post["id"], post["detail_url"], args.top_comments, args.comment_pages
-            )
-            post["comments"] = comments
+            comments = None
+            if args.with_comments:
+                comments = crawler.comments(
+                    post["id"], post["detail_url"], args.top_comments, args.comment_pages
+                )
+                post["comments"] = comments
             save_post(root, crawler, post, comments)
             results.append(post)
-            print(f"  完成：图片 {len(post['local_images'])} 张，评论 {len(comments)} 条")
+            if comments is None:
+                print(f"  完成：图片 {len(post['local_images'])} 张，未采集评论")
+            else:
+                print(f"  完成：图片 {len(post['local_images'])} 张，评论 {len(comments)} 条")
         except Exception as exc:
             failures += 1
             print(f"  失败：{type(exc).__name__}: {exc}")

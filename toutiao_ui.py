@@ -385,7 +385,10 @@ class CrawlerUI:
 
         def worker() -> None:
             try:
-                release = check_latest_release(self.proxy_var.get())
+                release = check_latest_release(
+                    self.proxy_var.get(),
+                    lambda: self.events.put(("update_fallback", "正在尝试内置备用更新代理……")),
+                )
                 self.events.put(("update_check", manual, release, None))
             except Exception as exc:
                 self.events.put(("update_check", manual, None, str(exc)))
@@ -405,7 +408,12 @@ class CrawlerUI:
                 def progress(downloaded: int, total: int) -> None:
                     self.events.put(("update_progress", downloaded, total))
 
-                path = download_release(release, self.proxy_var.get(), progress)
+                path = download_release(
+                    release,
+                    self.proxy_var.get(),
+                    progress,
+                    lambda: self.events.put(("update_fallback", "直连失败，正在使用内置备用代理下载……")),
+                )
                 self.events.put(("update_download", release, path, None))
             except Exception as exc:
                 self.events.put(("update_download", release, None, str(exc)))
@@ -491,6 +499,8 @@ class CrawlerUI:
                             self.update_progress.configure(mode="indeterminate")
                             self.update_progress.start(12)
                         self.update_progress_text.set(f"{downloaded / 1024 / 1024:.1f} MB")
+                elif event[0] == "update_fallback":
+                    self.summary_var.set(event[1])
         except queue.Empty:
             pass
         for url, (stage, started) in list(self.active_status.items()):

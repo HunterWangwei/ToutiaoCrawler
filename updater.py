@@ -13,6 +13,7 @@ from typing import Callable
 import requests
 
 from toutiao_crawler import normalize_socks5_proxy
+from update_proxy_config import BUILTIN_UPDATE_PROXY
 from version import (
     APP_NAME,
     APP_VERSION,
@@ -45,12 +46,39 @@ def _session(proxy: str = "") -> requests.Session:
     return session
 
 
-def check_latest_release(proxy: str = "") -> dict | None:
+def _proxy_candidates(proxy: str = "") -> list[tuple[str, bool]]:
+    """依次返回用户更新通道和构建时注入的备用更新通道。"""
+    candidates: list[tuple[str, bool]] = [(proxy.strip(), False)]
+    builtin = BUILTIN_UPDATE_PROXY.strip()
+    if builtin and builtin != proxy.strip():
+        candidates.append((builtin, True))
+    return candidates
+
+
+def _run_with_proxy_fallback(operation, proxy: str = "", fallback_notice=None):
+    last_error: Exception | None = None
+    candidates = _proxy_candidates(proxy)
+    for index, (candidate, is_builtin) in enumerate(candidates):
+        if is_builtin and fallback_notice:
+            fallback_notice()
+        try:
+            return operation(candidate, is_builtin)
+        except Exception as exc:
+            last_error = exc
+            if index + 1 >= len(candidates):
+                raise
+    raise RuntimeError(f"更新请求失败：{last_error}")
+
+
+def check_latest_release(proxy: str = "", fallback_notice=None) -> dict | None:
     """有新版时返回发布信息，否则返回 None。"""
-    with _session(proxy) as session:
-        response = session.get(GITHUB_API_LATEST, timeout=(10, 20))
-        response.raise_for_status()
-        release = response.json()
+    def request(candidate: str, is_builtin: bool):
+        with _session(candidate) as session:
+            response = session.get(GITHUB_API_LATEST, timeout=(10, 20))
+            response.raise_for_status()
+            return response.json(), is_builtin
+
+    release, used_builtin = _run_with_proxy_fallback(request, proxy, fallback_notice)
 
     tag = str(release.get("tag_name") or "").strip()
     if not tag or _version_tuple(tag) <= _version_tuple(APP_VERSION):
@@ -68,6 +96,7 @@ def check_latest_release(proxy: str = "") -> dict | None:
         "page_url": release.get("html_url") or "",
         "exe_url": executable.get("browser_download_url"),
         "checksum_url": checksum.get("browser_download_url"),
+        "used_builtin_proxy": used_builtin,
     }
 
 
@@ -75,37 +104,41 @@ def download_release(
     release: dict,
     proxy: str = "",
     progress: Callable[[int, int], None] | None = None,
+    fallback_notice=None,
 ) -> Path:
     """下载并校验新版 EXE，返回临时文件路径。"""
     target = Path(tempfile.gettempdir()) / f"{APP_NAME}-{release['version']}.exe.download"
-    with _session(proxy) as session:
-        checksum_response = session.get(release["checksum_url"], timeout=(10, 20))
-        checksum_response.raise_for_status()
-        expected = checksum_response.text.strip().split()[0].lower()
-        if len(expected) != 64:
-            raise RuntimeError("GitHub SHA256 校验文件格式无效")
-
-        with session.get(release["exe_url"], stream=True, timeout=(10, 60)) as response:
-            response.raise_for_status()
-            total = int(response.headers.get("Content-Length") or 0)
-            downloaded = 0
-            if progress:
-                progress(downloaded, total)
-            digest = hashlib.sha256()
-            with target.open("wb") as stream:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        stream.write(chunk)
-                        digest.update(chunk)
-                        downloaded += len(chunk)
-                        if progress:
-                            progress(downloaded, total)
-
-    actual = digest.hexdigest().lower()
-    if actual != expected:
+    def request(candidate: str, _is_builtin: bool):
         target.unlink(missing_ok=True)
-        raise RuntimeError("新版 EXE 的 SHA256 校验失败，已取消更新")
-    return target
+        with _session(candidate) as session:
+            checksum_response = session.get(release["checksum_url"], timeout=(10, 20))
+            checksum_response.raise_for_status()
+            expected = checksum_response.text.strip().split()[0].lower()
+            if len(expected) != 64:
+                raise RuntimeError("GitHub SHA256 校验文件格式无效")
+
+            with session.get(release["exe_url"], stream=True, timeout=(10, 60)) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("Content-Length") or 0)
+                downloaded = 0
+                if progress:
+                    progress(downloaded, total)
+                digest = hashlib.sha256()
+                with target.open("wb") as stream:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            stream.write(chunk)
+                            digest.update(chunk)
+                            downloaded += len(chunk)
+                            if progress:
+                                progress(downloaded, total)
+
+        if digest.hexdigest().lower() != expected:
+            target.unlink(missing_ok=True)
+            raise RuntimeError("新版 EXE 的 SHA256 校验失败，已取消更新")
+        return target
+
+    return _run_with_proxy_fallback(request, proxy, fallback_notice)
 
 
 def can_self_update() -> bool:

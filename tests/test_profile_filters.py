@@ -83,6 +83,21 @@ class ProfileContentCleaningTests(unittest.TestCase):
         self.assertIn("1. 这是一条评论", text)
         self.assertNotIn("赞 8", text)
 
+    def test_no_comment_mode_omits_comment_section(self):
+        class FakeCrawler:
+            @staticmethod
+            def download_images(post, folder: Path):
+                folder.mkdir(parents=True, exist_ok=True)
+                return []
+
+        post = {"id": "456", "content": "只保存正文", "images": []}
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            save_post(root, FakeCrawler(), post, None)
+            text = next((root / "内容").glob("*.txt")).read_text(encoding="utf-8-sig")
+        self.assertEqual(text, "只保存正文\n")
+        self.assertNotIn("评论：", text)
+
 
 if __name__ == "__main__":
     unittest.main()

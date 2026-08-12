@@ -17,6 +17,7 @@ from toutiao_profile_crawler import ProfileCrawler, safe_name, save_post
 
 DEFAULT_PROFILE_BLOCKED_WORDS = "政治|中央|证券|央行"
 TIME_MODES = ("不限时间", "仅今天", "自定义时间段")
+CONTENT_MODES = ("内容 + 图片 + 评论", "仅内容 + 图片")
 PROFILE_URL_RE = re.compile(r"https?://(?:www\.)?toutiao\.com/c/user/token/[^\s/?#]+[^\s]*", re.I)
 
 
@@ -116,10 +117,20 @@ class ProfileTab:
             row=3, column=1, sticky="w", padx=(75, 0), pady=(8, 0)
         )
 
-        ttk.Label(settings, text="高赞评论：").grid(row=3, column=2, sticky="e", pady=(8, 0))
+        ttk.Label(settings, text="采集内容：").grid(row=3, column=2, sticky="e", pady=(8, 0))
+        self.content_mode_var = self._string_var("profile_content_mode", CONTENT_MODES[0])
+        ttk.Combobox(
+            settings,
+            textvariable=self.content_mode_var,
+            values=CONTENT_MODES,
+            state="readonly",
+            width=18,
+        ).grid(row=3, column=3, sticky="w", padx=6, pady=(8, 0))
+
+        ttk.Label(settings, text="高赞评论：").grid(row=4, column=2, sticky="e", pady=(8, 0))
         self.comment_count = self._int_var("profile_comments", 10)
         ttk.Spinbox(settings, from_=5, to=10, textvariable=self.comment_count, width=7).grid(
-            row=3, column=3, sticky="w", padx=6, pady=(8, 0)
+            row=4, column=3, sticky="w", padx=6, pady=(8, 0)
         )
 
         ttk.Label(settings, text="最低评论数：").grid(row=4, column=0, sticky="w", pady=(8, 0))
@@ -225,6 +236,7 @@ class ProfileTab:
             "profile_output": self.output_var.get(),
             "profile_pages": integer(self.profile_pages, 0),
             "profile_comments": integer(self.comment_count, 10),
+            "profile_content_mode": self.content_mode_var.get(),
             "profile_min_comments": integer(self.min_comments, 10),
             "profile_time_mode": self.time_mode_var.get(),
             "profile_start_date": self.start_date_var.get(),
@@ -300,6 +312,7 @@ class ProfileTab:
                 ProfileCrawler.profile_token(profile_url)
             pages = int(self.profile_pages.get())
             comments = int(self.comment_count.get())
+            content_mode = self.content_mode_var.get()
             workers = int(self.thread_count.get())
             min_comments = int(self.min_comments.get())
             time_mode = self.time_mode_var.get()
@@ -307,6 +320,8 @@ class ProfileTab:
                 raise ValueError("主页页数不能小于 0")
             if not 5 <= comments <= 10:
                 raise ValueError("评论数量必须设置为 5–10")
+            if content_mode not in CONTENT_MODES:
+                raise ValueError("采集内容设置无效")
             if not 1 <= workers <= 5:
                 raise ValueError("并发线程必须设置为 1–5")
             if min_comments < 0:
@@ -342,6 +357,7 @@ class ProfileTab:
         ]
         proxy = self.proxy_var.get().strip()
         output_path = self.output_var.get().strip()
+        with_comments = content_mode == CONTENT_MODES[0]
         self.running = True
         self.stop_event.clear()
         self.start_button.configure(state="disabled")
@@ -349,7 +365,7 @@ class ProfileTab:
         self.summary_var.set("正在读取个人主页作品列表……")
         threading.Thread(
             target=self._worker,
-            args=(profile_urls, pages, comments, workers, min_comments, start_at, end_at, cookie, blocked, proxy, output_path),
+            args=(profile_urls, pages, comments, with_comments, workers, min_comments, start_at, end_at, cookie, blocked, proxy, output_path),
             daemon=True,
         ).start()
 
@@ -358,6 +374,7 @@ class ProfileTab:
         profile_urls: list[str],
         pages: int,
         comments: int,
+        with_comments: bool,
         workers: int,
         min_comments: int,
         start_at: datetime | None,
@@ -439,12 +456,20 @@ class ProfileTab:
                         log(url, "含违禁词，已过滤：" + "、".join(matched))
                         self.events.put(("status", url, "含违禁词：" + "、".join(matched)))
                         return "filtered", None
-                    self.events.put(("status", url, "采集评论"))
-                    post_comments = crawler.comments(post["id"], post["detail_url"], comments, 3)
+                    post_comments = None
+                    if with_comments:
+                        self.events.put(("status", url, "采集评论"))
+                        post_comments = crawler.comments(
+                            post["id"], post["detail_url"], comments, 3
+                        )
                     self.events.put(("status", url, "下载图片"))
                     save_post(root, crawler, post, post_comments)
-                    post["comments"] = post_comments
-                    log(url, f"完成：图片 {len(post.get('local_images') or [])} 张，评论 {len(post_comments)} 条")
+                    if post_comments is not None:
+                        post["comments"] = post_comments
+                        detail = f"评论 {len(post_comments)} 条"
+                    else:
+                        detail = "未采集评论"
+                    log(url, f"完成：图片 {len(post.get('local_images') or [])} 张，{detail}")
                     self.events.put(("status", url, "完成"))
                     return "completed", post
                 except Exception as exc:
