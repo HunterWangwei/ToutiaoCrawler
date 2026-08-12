@@ -2,6 +2,7 @@ import hashlib
 from pathlib import Path
 import unittest
 from unittest.mock import patch
+import tempfile
 
 import updater
 
@@ -55,14 +56,35 @@ class UpdaterProgressTests(unittest.TestCase):
             "checksum_url": "https://example/checksum",
             "exe_url": "https://example/exe",
         }
-        with patch.object(updater, "_session", return_value=session):
-            target = updater.download_release(release, progress=lambda done, total: events.append((done, total)))
-        try:
+        with tempfile.TemporaryDirectory() as folder:
+            current_exe = Path(folder) / "ToutiaoCrawler.exe"
+            current_exe.write_bytes(b"old")
+            with (
+                patch.object(updater, "_session", return_value=session),
+                patch.object(updater, "can_self_update", return_value=True),
+                patch.object(updater.sys, "executable", str(current_exe)),
+            ):
+                target = updater.download_release(
+                    release, progress=lambda done, total: events.append((done, total))
+                )
             self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(target.name, "ToutiaoCrawler-99.99.99-test-progress.exe")
             self.assertEqual(events[0], (0, len(payload)))
             self.assertEqual(events[-1], (len(payload), len(payload)))
-        finally:
-            Path(target).unlink(missing_ok=True)
+
+    def test_install_starts_versioned_exe_directly(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "ToutiaoCrawler-9.9.9.exe"
+            target.write_bytes(b"exe")
+            with (
+                patch.object(updater, "can_self_update", return_value=True),
+                patch.object(updater.subprocess, "Popen") as popen,
+            ):
+                updater.install_and_restart(target)
+            popen.assert_called_once()
+            args, kwargs = popen.call_args
+            self.assertEqual(args[0], [str(target.resolve())])
+            self.assertEqual(kwargs["cwd"], str(target.parent.resolve()))
 
     def test_proxy_fallback_runs_after_primary_failure(self):
         attempts = []

@@ -6,7 +6,6 @@ import hashlib
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -106,10 +105,16 @@ def download_release(
     progress: Callable[[int, int], None] | None = None,
     fallback_notice=None,
 ) -> Path:
-    """下载并校验新版 EXE，返回临时文件路径。"""
-    target = Path(tempfile.gettempdir()) / f"{APP_NAME}-{release['version']}.exe.download"
+    """下载到当前程序目录，校验后返回带版本号的新版 EXE 路径。"""
+    if not can_self_update():
+        raise RuntimeError("源码运行模式不能自动下载到程序目录，请下载 Release 版本")
+    version = str(release["version"]).strip().lstrip("vV")
+    install_dir = Path(sys.executable).resolve().parent
+    final_target = install_dir / f"{APP_NAME}-{version}.exe"
+    partial_target = install_dir / f"{APP_NAME}-{version}.exe.part"
+
     def request(candidate: str, _is_builtin: bool):
-        target.unlink(missing_ok=True)
+        partial_target.unlink(missing_ok=True)
         with _session(candidate) as session:
             checksum_response = session.get(release["checksum_url"], timeout=(10, 20))
             checksum_response.raise_for_status()
@@ -124,7 +129,7 @@ def download_release(
                 if progress:
                     progress(downloaded, total)
                 digest = hashlib.sha256()
-                with target.open("wb") as stream:
+                with partial_target.open("wb") as stream:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
                         if chunk:
                             stream.write(chunk)
@@ -134,9 +139,10 @@ def download_release(
                                 progress(downloaded, total)
 
         if digest.hexdigest().lower() != expected:
-            target.unlink(missing_ok=True)
+            partial_target.unlink(missing_ok=True)
             raise RuntimeError("新版 EXE 的 SHA256 校验失败，已取消更新")
-        return target
+        os.replace(partial_target, final_target)
+        return final_target
 
     return _run_with_proxy_fallback(request, proxy, fallback_notice)
 
@@ -146,54 +152,15 @@ def can_self_update() -> bool:
 
 
 def install_and_restart(downloaded_exe: Path) -> None:
-    """退出当前程序后替换 EXE 并自动重启。"""
+    """启动并排保存的新版 EXE；调用方随后关闭旧版。"""
     if not can_self_update():
-        raise RuntimeError("源码运行模式不能自动替换文件，请下载 Release 版本")
-
-    current_exe = Path(sys.executable).resolve()
-    script_path = Path(tempfile.gettempdir()) / f"{APP_NAME}-update-{os.getpid()}.ps1"
-
-    def ps_quote(value: str) -> str:
-        return value.replace("'", "''")
-
-    script = f"""$ErrorActionPreference = 'Stop'
-$Source = '{ps_quote(str(downloaded_exe.resolve()))}'
-$Target = '{ps_quote(str(current_exe))}'
-$Working = '{ps_quote(str(current_exe.parent))}'
-$WaitPid = {os.getpid()}
-for ($i = 0; $i -lt 120; $i++) {{
-    $Running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {{
-        try {{ $_.Path -eq $Target }} catch {{ $false }}
-    }})
-    if ($Running.Count -eq 0) {{ break }}
-    Start-Sleep -Seconds 1
-}}
-for ($i = 0; $i -lt 60; $i++) {{
-    try {{
-        Copy-Item -LiteralPath $Source -Destination ($Target + '.new') -Force
-        Move-Item -LiteralPath ($Target + '.new') -Destination $Target -Force
-        # 给杀毒软件和文件系统留出完成扫描、刷新文件句柄的时间。
-        Start-Sleep -Seconds 5
-        Start-Process -FilePath $Target -WorkingDirectory $Working
-        Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-        exit 0
-    }} catch {{
-        Start-Sleep -Seconds 1
-    }}
-}}
-exit 1
-"""
-    script_path.write_text(script, encoding="utf-8-sig")
+        raise RuntimeError("源码运行模式不能自动启动更新，请下载 Release 版本")
+    downloaded_exe = downloaded_exe.resolve()
+    if not downloaded_exe.is_file():
+        raise FileNotFoundError(f"新版文件不存在：{downloaded_exe}")
     subprocess.Popen(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script_path),
-        ],
+        [str(downloaded_exe)],
+        cwd=str(downloaded_exe.parent),
         creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True,
     )

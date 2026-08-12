@@ -481,8 +481,8 @@ class CrawlerUI:
                             self.update_progress.configure(mode="determinate")
                             self.update_progress_var.set(100)
                             self.update_progress_text.set("100%")
-                            self.summary_var.set("正在安装更新并重启……")
-                            self.root.after(300, self.root.destroy)
+                            self.summary_var.set(f"新版已启动：{path.name}；正在关闭旧版……")
+                            self.root.after(1200, self.root.destroy)
                 elif event[0] == "update_progress":
                     downloaded, total = event[1], event[2]
                     if total > 0:

@@ -1,6 +1,6 @@
 # 今日头条内容采集工具
 
-当前版本：`1.7.0`
+当前版本：`1.7.1`
 更新日期：`2026-08-11`
 
 用于批量采集今日头条微头条的正文、图片和高赞评论。软件提供 Windows 图形界面，可从 TXT 文件批量导入链接，并逐条显示采集进度。
@@ -22,9 +22,11 @@ EXE 已包含 Python、拖拽组件和 SOCKS5 支持，其他电脑不需要安�
 
 推荐运行环境为 Windows 10/11 64 位。请把 EXE 放在普通、可写的文件夹中运行，不要直接在压缩包、系统目录或只读目录中启动。
 
-软件底部和窗口标题会显示当前版本号。启动后会自动检查 GitHub Releases；发现新版时可直接下载、校验、替换当前 EXE 并自动重启。也可点击“检查更新”手动检查。
+软件底部和窗口标题会显示当前版本号。启动后会自动检查 GitHub Releases；发现新版时可直接下载、校验、启动新版本并关闭旧版本。也可点击“检查更新”手动检查。
 
-更新下载期间会显示百分比、已下载大小和文件总大小。安装阶段会等待旧版单文件 EXE 的所有父、子进程完全退出，再替换文件并延迟重启，降低临时 Python DLL 加载失败的概率。
+更新下载期间会显示百分比、已下载大小和文件总大小。新版首先保存为当前软件目录下的 `ToutiaoCrawler-版本号.exe.part`，SHA256 校验通过后改名为 `ToutiaoCrawler-版本号.exe`。软件随后直接启动新文件并关闭旧版本，不再覆盖或删除原 EXE。
+
+自动更新需要当前 EXE 所在目录具有写入权限。旧版会保留作为回退文件，确认新版运行正常后可手动删除不再需要的旧版 EXE。
 
 ## 二、导入链接
 
@@ -299,11 +301,12 @@ https://www.toutiao.com/c/user/token/主页Token2/?tab=wtt
 - 备用代理凭据不会写入公开源码或文档，而是在 GitHub Actions 编译正式 EXE 时通过仓库 Secret 注入。
 - 备用代理属于兜底通道，若代理本身到期、拥堵或不可用，仍需手动下载新版或填写其他可用代理。
 - 推荐使用 `socks5h`，让 GitHub 域名解析也通过代理完成。
-- 无法访问 GitHub 的电脑可由其他电脑下载 Release 中的 EXE，再通过网盘、局域网或 U 盘手动覆盖旧版；覆盖前应退出所有软件进程。
+- 无法访问 GitHub 的电脑可由其他电脑下载 Release 中的 EXE，再通过网盘、局域网或 U 盘传输。可以直接使用不同文件名运行，不必覆盖旧版。
 
 ### 更新后提示 python312.dll 加载失败
 
-- `v1.6.1` 已改为等待旧版 EXE 的所有父、子进程退出，替换后延迟启动，并显示下载进度。
+- `python312.dll` 是 PyInstaller 单文件 EXE 内置的 Python 运行库，启动时会释放到 `%TEMP%\_MEI...`，并不是软件额外安装了 Python。
+- `v1.7.1` 已取消覆盖原 EXE和 PowerShell替换脚本，改为在当前目录并排保存并启动 `ToutiaoCrawler-版本号.exe`。
 - 若仍出现该提示，请彻底退出软件，等待安全软件扫描结束后再次启动。
 - 检查 Windows Defender 或其他安全软件的隔离区，确认没有拦截 EXE 释放到 `%TEMP%\_MEI...` 的运行文件。
 - 仍无法启动时，删除旧 EXE，重新下载完整 Release 文件，并核对同一 Release 中的 SHA256 校验值。
@@ -348,8 +351,8 @@ python .\toutiao_profile_crawler\crawler.py "https://www.toutiao.com/c/user/toke
 发布时同步修改 `version.py` 中的版本号，然后创建版本标签：
 
 ```powershell
-git tag v1.7.0
-git push origin v1.7.0
+git tag v1.7.1
+git push origin v1.7.1
 ```
 
 GitHub Actions 会注入备用更新代理、构建 `ToutiaoCrawler.exe`、生成 SHA256 校验文件，并使用 `RELEASE_NOTES.md` 发布完整 Release说明。发布前必须配置仓库 Secret `BUILTIN_UPDATE_PROXY`。
