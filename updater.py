@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -53,27 +54,33 @@ def _session(proxy: str = "") -> requests.Session:
 
 
 def _proxy_candidates(proxy: str = "") -> list[tuple[str, bool]]:
-    """依次返回用户更新通道和构建时注入的备用更新通道。"""
-    candidates: list[tuple[str, bool]] = [(proxy.strip(), False)]
+    """代理优先：用户代理、内置代理、最后才尝试直连。"""
+    user_proxy = proxy.strip()
     builtin = BUILTIN_UPDATE_PROXY.strip()
-    if builtin and builtin != proxy.strip():
+    candidates: list[tuple[str, bool]] = []
+    if user_proxy:
+        candidates.append((user_proxy, False))
+    if builtin and builtin != user_proxy:
         candidates.append((builtin, True))
+    candidates.append(("", False))
     return candidates
 
 
 def _run_with_proxy_fallback(operation, proxy: str = "", fallback_notice=None):
-    last_error: Exception | None = None
+    errors: list[str] = []
     candidates = _proxy_candidates(proxy)
-    for index, (candidate, is_builtin) in enumerate(candidates):
+    for candidate, is_builtin in candidates:
         if is_builtin and fallback_notice:
             fallback_notice()
-        try:
-            return operation(candidate, is_builtin)
-        except Exception as exc:
-            last_error = exc
-            if index + 1 >= len(candidates):
-                raise
-    raise RuntimeError(f"更新请求失败：{last_error}")
+        channel = "用户代理" if candidate and not is_builtin else "内置代理" if is_builtin else "直连"
+        for attempt in range(1, 4):
+            try:
+                return operation(candidate, is_builtin)
+            except Exception as exc:
+                errors.append(f"{channel}第{attempt}次：{type(exc).__name__}: {exc}")
+                if attempt < 3:
+                    time.sleep(attempt)
+    raise RuntimeError("所有更新通道均失败：\n" + "\n".join(errors))
 
 
 def check_latest_release(proxy: str = "", fallback_notice=None) -> dict | None:

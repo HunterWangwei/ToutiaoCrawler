@@ -1,6 +1,6 @@
 # 今日头条内容采集工具
 
-当前版本：`1.7.2`
+当前版本：`1.7.3`
 更新日期：`2026-08-11`
 
 用于批量采集今日头条微头条的正文、图片和高赞评论。软件提供 Windows 图形界面，可从 TXT 文件批量导入链接，并逐条显示采集进度。
@@ -298,7 +298,10 @@ https://www.toutiao.com/c/user/token/主页Token2/?tab=wtt
 - 自动更新源为 GitHub Releases，电脑必须能够解析并访问 `api.github.com` 和 `github.com`。
 - 出现 `NameResolutionError`、`getaddrinfo failed` 或“无法解析 github.com”时，属于 DNS 或网络访问问题，并非更新包损坏。
 - 更新器使用“微头条链接采集”页中的 S5 代理；需要通过代理更新时，请先在该页填写可用代理，再点击“检查更新”。
-- 如果用户填写的代理或本机直连 GitHub 失败，正式 Release 会自动尝试构建时注入的备用更新代理，并在状态栏显示切换提示。
+- 更新通道采用代理优先策略：填写了用户代理时按“用户代理 → 内置代理 → 直连”尝试；未填写时按“内置代理 → 直连”尝试。
+- 版本检查、SHA256和EXE下载使用相同的通道优先顺序，避免 GitHub API 能直连但附件域名无法直连的问题。
+- 每个通道遇到连接中断、超时等错误时最多自动重试3次，然后才切换下一通道。
+- 使用内置代理时会在状态栏显示提示。
 - 备用代理仅用于检查和下载软件更新，不用于采集今日头条内容。
 - 备用代理凭据不会写入公开源码或文档，而是在 GitHub Actions 编译正式 EXE 时通过仓库 Secret 注入。
 - 备用代理属于兜底通道，若代理本身到期、拥堵或不可用，仍需手动下载新版或填写其他可用代理。
@@ -353,8 +356,8 @@ python .\toutiao_profile_crawler\crawler.py "https://www.toutiao.com/c/user/toke
 发布时同步修改 `version.py` 中的版本号，然后创建版本标签：
 
 ```powershell
-git tag v1.7.2
-git push origin v1.7.2
+git tag v1.7.3
+git push origin v1.7.3
 ```
 
 GitHub Actions 会注入备用更新代理、构建 `ToutiaoCrawler.exe`、生成 SHA256 校验文件，并使用 `RELEASE_NOTES.md` 发布完整 Release说明。发布前必须配置仓库 Secret `BUILTIN_UPDATE_PROXY`。

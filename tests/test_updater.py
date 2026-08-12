@@ -107,15 +107,23 @@ class UpdaterProgressTests(unittest.TestCase):
                 raise OSError("primary unavailable")
             return "ok"
 
-        with patch.object(updater, "BUILTIN_UPDATE_PROXY", "socks5h://fallback.example:1080"):
+        with (
+            patch.object(updater, "BUILTIN_UPDATE_PROXY", "socks5h://fallback.example:1080"),
+            patch.object(updater.time, "sleep"),
+        ):
             result = updater._run_with_proxy_fallback(
-                operation, "", lambda: notices.append("fallback")
+                operation, "socks5h://user.example:1080", lambda: notices.append("fallback")
             )
 
         self.assertEqual(result, "ok")
         self.assertEqual(
             attempts,
-            [("", False), ("socks5h://fallback.example:1080", True)],
+            [
+                ("socks5h://user.example:1080", False),
+                ("socks5h://user.example:1080", False),
+                ("socks5h://user.example:1080", False),
+                ("socks5h://fallback.example:1080", True),
+            ],
         )
         self.assertEqual(notices, ["fallback"])
 
@@ -126,5 +134,13 @@ class UpdaterProgressTests(unittest.TestCase):
                 [
                     ("socks5h://user.example:1080", False),
                     ("socks5h://fallback.example:1080", True),
+                    ("", False),
                 ],
+            )
+
+    def test_builtin_proxy_is_tried_before_direct_connection(self):
+        with patch.object(updater, "BUILTIN_UPDATE_PROXY", "socks5h://fallback.example:1080"):
+            self.assertEqual(
+                updater._proxy_candidates(""),
+                [("socks5h://fallback.example:1080", True), ("", False)],
             )
